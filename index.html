@@ -867,10 +867,13 @@ async function loadAdminData() {
     updateAdminLecturerList();
     updateEomsLecturerList(); // Isi dropdown EOMS
     
+    // Kumpul semua tahun unik dari keseluruhan rekod
     const years = [...new Set(adminRecords.map(r => r.Tahun).filter(Boolean))].sort().reverse();
-    $('adminYearFilter').innerHTML = '<option value="">Semua Tahun</option>' + years.map(y => `<option>${esc(y)}</option>`).join('');
-    $('adminDetailYearFilter').innerHTML = '<option value="">Semua Tahun</option>' + years.map(y => `<option>${esc(y)}</option>`).join('');
-    $('eomsYearFilter').innerHTML = '<option value="">Semua Tahun</option>' + years.map(y => `<option>${esc(y)}</option>`).join('');
+    const yearOptions = '<option value="">Semua Tahun</option>' + years.map(y => `<option>${esc(y)}</option>`).join('');
+    
+    $('adminYearFilter').innerHTML = yearOptions;
+    $('adminDetailYearFilter').innerHTML = yearOptions;
+    $('eomsYearFilter').innerHTML = yearOptions;
   } catch(e) { console.error(e); }
 }
 

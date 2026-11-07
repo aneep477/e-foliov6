@@ -1,0 +1,1955 @@
+Memandangkan saya adalah AI berasaskan teks, saya **tidak boleh menjana fail `.zip` secara terus** untuk dimuat turun. Walau bagaimanapun, saya telah menyediakan **Pakej Pemindahan Lengkap** di bawah. 
+
+Anda hanya perlu salin kod ini, dan ikut **Manual Pemasangan** yang saya sediakan. Saya juga telah menambah fungsi **Auto-Setup (Setup Wizard)** di dalam kod `Code.gs` supaya anda tidak perlu lagi mencipta tab Google Sheet secara manual — sistem akan menjana semua tab dan header secara automatik apabila dijalankan.
+
+---
+
+### 📁 STRUKTUR FAIL YANG DICADANGKAN
+Apabila anda mahu berkongsi dengan jabatan lain, sediakan 3 fail teks/notepad ini di dalam satu folder (contoh: `E-Folio-Template`):
+1. `Code.gs`
+2. `Index.html`
+3. `MANUAL_PEMASANGAN.md` (Salin manual di bawah)
+
+---
+
+### 📄 1. Code.gs (Backend — Penuh & Auto-Setup)
+
+*Sila salin keseluruhan kod ini ke dalam editor Apps Script.*
+
+```javascript
+/**
+ * E-FOLIO MULTI-PENSYARAH v17
+ * Backend Google Apps Script
+ * Auto-Setup: Menjana tab Google Sheet secara automatik.
+ */
+
+const APP = {
+  USERS: 'APP_USERS',
+  RECORDS: 'APP_RECORDS',
+  AUDIT: 'APP_AUDIT',
+  CHECKLIST: 'APP_CHECKLIST',
+  EOMS: 'APP_EOMS',
+  CONFIG: 'APP_CONFIG',
+  FOLDER_NAME: 'E-Folio Uploads'
+};
+
+const HEADERS = {
+  APP_USERS: ['UserId','Email','PasswordHash','NamaPenuh','NoPekerja','Gred','Jabatan','Role','FotoUrl','Status','CreatedAt','UpdatedAt','DriveFolderId','DriveFolderUrl'],
+  APP_RECORDS: ['RecordId','OwnerEmail','Section','Tahun','Semester','Kategori','Tajuk','Keterangan','FileUrl','FileId','FileName','FileMimeType','CreatedAt','UpdatedAt'],
+  APP_AUDIT: ['AuditId','ActorEmail','Action','TargetType','TargetId','Summary','CreatedAt'],
+  APP_CHECKLIST: ['ChecklistId','OwnerEmail','ItemName','Status','UpdatedAt'],
+  APP_EOMS: ['EomsId','OwnerEmail','ItemName','Status','UpdatedAt'],
+  APP_CONFIG: ['Key','Value']
+};
+
+const DEFAULT_ADMIN = {
+  email: 'admin@ipgm.edu.my', // Boleh tukar mengikut jabatan
+  password: '987654321',
+  name: 'Pentadbir Sistem'
+};
+
+// URL Web App (Akan dikemas kini selepas Deploy)
+const WEB_APP_URL = 'https://script.google.com/macros/s/AKfycbz09-ZqqFPKu22lXhMFVM7Ay6_o_g1HqM4OJwaxbBnsswrQBWjtbtYwqbCTWBrc324/exec'; 
+
+function doGet() {
+  return json_({ ok: true, service: 'E-Folio Multi-Pensyarah', version: '17.0.0' });
+}
+
+function doPost(e) {
+  const lock = LockService.getScriptLock();
+  lock.waitLock(20000);
+  try {
+    const body = JSON.parse((e && e.postData && e.postData.contents) || '{}');
+    const action = String(body.action || '').trim();
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    
+    // Auto-Setup
+    setup_();
+    setupAdmin_(ss);
+
+    if (action === 'register') return register_(ss, body);
+    if (action === 'login') return login_(ss, body);
+    if (action === 'logout') return logout_(body);
+    if (action === 'forgotPassword') return forgotPassword_(ss, body);
+    if (action === 'resetPassword') return resetPassword_(ss, body);
+
+    const user = requireSession_(body.token);
+    if (action === 'bootstrap') return bootstrap_(ss, user);
+    if (action === 'listRecords') return listRecords_(ss, user, body);
+    if (action === 'saveRecord') return saveRecord_(ss, user, body);
+    if (action === 'deleteRecord') return deleteRecord_(ss, user, body);
+    if (action === 'updateProfile') return updateProfile_(ss, user, body);
+    if (action === 'uploadImage') return uploadImage_(ss, user, body);
+    if (action === 'uploadMaterial') return uploadMaterial_(ss, user, body);
+    if (action === 'listLecturers') return listLecturers_(ss, user);
+    if (action === 'toggleChecklist') return toggleChecklist_(ss, user, body);
+    if (action === 'listAllRecords') return listAllRecords_(ss, user, body);
+    if (action === 'toggleEoms') return toggleEoms_(ss, user, body);
+    if (action === 'getEomsStatus') return getEomsStatus_(ss, user, body);
+
+    return fail_('ACTION_INVALID', 'Tindakan tidak dikenali.');
+  } catch (err) {
+    console.error(err);
+    return fail_('SERVER_ERROR', 'Ralat pelayan. Sila cuba semula.');
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+function setup_() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  Object.keys(HEADERS).forEach(name => {
+    let sh = ss.getSheetByName(name);
+    if (!sh) sh = ss.insertSheet(name);
+    const required = HEADERS[name];
+    const current = sh.getRange(1, 1, 1, required.length).getValues()[0];
+    const blank = current.every(v => String(v || '').trim() === '');
+    if (blank) sh.getRange(1, 1, 1, required.length).setValues([required]);
+    else {
+      const currentLabels = current.map(v => String(v || '').trim());
+      required.forEach((header, i) => { if (!currentLabels.includes(header)) sh.getRange(1, i + 1).setValue(header); });
+    }
+    sh.setFrozenRows(1);
+  });
+  const props = PropertiesService.getScriptProperties();
+  if (!props.getProperty('UPLOAD_FOLDER_ID')) {
+    const folder = DriveApp.createFolder(APP.FOLDER_NAME);
+    props.setProperty('UPLOAD_FOLDER_ID', folder.getId());
+  }
+}
+
+function setupAdmin_(ss) {
+  const sh = ss.getSheetByName(APP.USERS);
+  const rows = rows_(sh);
+  const adminExists = rows.some(r => normalEmail_(r.Email) === DEFAULT_ADMIN.email);
+  
+  if (!adminExists) {
+    const now = new Date().toISOString();
+    const folder = createLecturerFolder_(DEFAULT_ADMIN.name, DEFAULT_ADMIN.email);
+    sh.appendRow([
+      Utilities.getUuid(), DEFAULT_ADMIN.email, hash_(DEFAULT_ADMIN.password), 
+      DEFAULT_ADMIN.name, '', '', '', 'Admin', '', 'Aktif', 
+      now, now, folder.getId(), folder.getUrl()
+    ]);
+    audit_(ss, DEFAULT_ADMIN.email, 'AUTO_CREATE_ADMIN', 'USER', '', 'Akaun admin lalai dijana');
+  }
+}
+
+/* ============ AUTH ============ */
+
+function register_(ss, b) {
+  const email = normalEmail_(b.email);
+  const name = clean_(b.namaPenuh, 120);
+  const password = String(b.password || '');
+  if (!email || !name) return fail_('VALIDATION', 'Nama penuh dan emel wajib diisi.');
+  if (password.length < 8) return fail_('VALIDATION', 'Kata laluan mestilah sekurang-kurangnya 8 aksara.');
+  const sh = ss.getSheetByName(APP.USERS);
+  const rows = rows_(sh);
+  if (rows.some(r => normalEmail_(r.Email) === email)) return fail_('DUPLICATE', 'Emel ini sudah didaftarkan.');
+  
+  const role = 'Pensyarah';
+  const now = new Date().toISOString();
+  const folder = createLecturerFolder_(name, email);
+  let photoUrl = '';
+  if (b.photoDataUrl) {
+    try {
+      const saved = saveImageToFolder_(folder, b.photoDataUrl, '00_Foto_Profil', b.photoFileName || 'foto_profil');
+      photoUrl = saved.url;
+    } catch (e) { console.warn('photo skipped:', e); }
+  }
+  const user = {
+    UserId: Utilities.getUuid(), Email: email, NamaPenuh: name,
+    NoPekerja: clean_(b.noPekerja, 40), Gred: clean_(b.gred, 40),
+    Jabatan: clean_(b.jabatan, 120), Role: role, FotoUrl: photoUrl,
+    Status: 'Aktif', CreatedAt: now, UpdatedAt: now,
+    DriveFolderId: folder.getId(), DriveFolderUrl: folder.getUrl()
+  };
+  sh.appendRow([user.UserId, user.Email, hash_(password), user.NamaPenuh, user.NoPekerja, user.Gred, user.Jabatan, user.Role, user.FotoUrl, user.Status, now, now, user.DriveFolderId, user.DriveFolderUrl]);
+  audit_(ss, email, 'REGISTER', 'USER', user.UserId, 'Akaun dan folder Drive pensyarah dicipta');
+  return sessionResponse_(user, 'Pendaftaran berjaya.');
+}
+
+function login_(ss, b) {
+  const email = normalEmail_(b.email);
+  const password = String(b.password || '');
+  const found = rows_(ss.getSheetByName(APP.USERS)).find(r => normalEmail_(r.Email) === email);
+  if (!found || String(found.Status || 'Aktif').toLowerCase() !== 'aktif') return fail_('LOGIN_FAILED', 'Emel atau kata laluan tidak sah.');
+  const stored = String(found.PasswordHash || '');
+  const valid = stored === hash_(password) || stored === password;
+  if (!valid) return fail_('LOGIN_FAILED', 'Emel atau kata laluan tidak sah.');
+  if (stored === password) ss.getSheetByName(APP.USERS).getRange(found._row, 3).setValue(hash_(password));
+  return sessionResponse_(userFromRow_(found), 'Log masuk berjaya.');
+}
+
+/* ============ FORGOT & RESET PASSWORD ============ */
+
+function forgotPassword_(ss, b) {
+  const email = normalEmail_(b.email);
+  const sh = ss.getSheetByName(APP.USERS);
+  const found = rows_(sh).find(r => normalEmail_(r.Email) === email);
+  
+  if (!found) return fail_('NOT_FOUND', 'Emel ini tidak didaftarkan dalam sistem.');
+  
+  const token = Utilities.getUuid().replace(/-/g, '');
+  CacheService.getScriptCache().put('reset_' + token, email, 900); 
+  
+  const resetLink = WEB_APP_URL + '?reset=' + token;
+  
+  try {
+    GmailApp.sendEmail(email, 'Set Semula Kata Laluan - E-Folio', 
+      'Sila klik pautan berikut untuk set semula kata laluan anda: ' + resetLink, 
+      {
+        htmlBody: `
+          <div style="font-family: Arial, sans-serif; max-width: 600px; margin: auto; padding: 20px; border: 1px solid #e2e8f0; border-radius: 10px;">
+            <h2 style="color: #1e40af;">Set Semula Kata Laluan</h2>
+            <p>Salam sejahtera,</p>
+            <p>Kami menerima permohonan untuk set semula kata laluan bagi akaun E-Folio anda (${email}).</p>
+            <p>Sila klik pautan di bawah untuk menetapkan kata laluan baharu. Pautan ini sah selama 15 minit.</p>
+            <div style="text-align: center; margin: 30px 0;">
+              <a href="${resetLink}" style="background-color: #1e40af; color: white; padding: 12px 24px; text-decoration: none; border-radius: 6px; font-weight: bold;">Set Semula Kata Laluan</a>
+            </div>
+            <p style="font-size: 12px; color: #64748b;">Jika anda tidak meminta perkara ini, sila abaikan e-mel ini. Akaun anda kekal selamat.</p>
+          </div>
+        `
+      }
+    );
+    return json_({ ok: true, message: 'Pautan set semula telah dihantar ke emel anda.' });
+  } catch (e) {
+    console.error("Ralat e-mel: ", e);
+    return fail_('EMAIL_BLOCKED', 'Sistem e-mel disekat oleh pihak IT. Sila hubungi Pentadbir Sistem (Admin) secara terus.');
+  }
+}
+
+function resetPassword_(ss, b) {
+  const token = String(b.token || '');
+  const newPassword = String(b.password || '');
+  
+  if (newPassword.length < 8) return fail_('VALIDATION', 'Kata laluan mestilah sekurang-kurangnya 8 aksara.');
+  
+  const email = CacheService.getScriptCache().get('reset_' + token);
+  if (!email) return fail_('INVALID_TOKEN', 'Pautan tidak sah atau telah tamat tempoh.');
+  
+  const sh = ss.getSheetByName(APP.USERS);
+  const found = rows_(sh).find(r => normalEmail_(r.Email) === email);
+  if (!found) return fail_('NOT_FOUND', 'Pengguna tidak ditemui.');
+  
+  sh.getRange(found._row, 3).setValue(hash_(newPassword));
+  audit_(ss, email, 'RESET_PASSWORD', 'USER', found.UserId, 'Kata laluan ditetapkan semula');
+  
+  CacheService.getScriptCache().remove('reset_' + token);
+  
+  return json_({ ok: true, message: 'Kata laluan berjaya dikemas kini. Sila log masuk.' });
+}
+
+/* ============ SESSION & UTILS ============ */
+
+function sessionResponse_(user, message) {
+  const token = Utilities.getUuid().replace(/-/g, '') + Utilities.getUuid().replace(/-/g, '');
+  CacheService.getScriptCache().put('efolio_session_' + token, JSON.stringify(user), 21600);
+  return json_({ ok: true, message: message, token: token, user: user });
+}
+
+function requireSession_(token) {
+  if (!token) throw new Error('SESSION_INVALID');
+  const raw = CacheService.getScriptCache().get('efolio_session_' + String(token));
+  if (!raw) throw new Error('SESSION_INVALID');
+  return JSON.parse(raw);
+}
+
+function logout_(b) {
+  if (b.token) CacheService.getScriptCache().remove('efolio_session_' + String(b.token));
+  return json_({ ok: true });
+}
+
+function bootstrap_(ss, user) {
+  return json_({ ok: true, user: user, categories: categories_(), stats: stats_(ss, user) });
+}
+
+function stats_(ss, user) {
+  const rows = rows_(ss.getSheetByName(APP.RECORDS));
+  const mine = user.Role === 'Admin' ? rows : rows.filter(r => normalEmail_(r.OwnerEmail) === normalEmail_(user.Email));
+  return {
+    records: mine.length,
+    lecturers: rows_(ss.getSheetByName(APP.USERS)).length,
+    images: mine.filter(r => r.FileMimeType && String(r.FileMimeType).startsWith('image/')).length
+  };
+}
+
+function categories_() {
+  return {
+    PROFIL: ['Curriculum Vitae','Senarai Tugas','Sijil Kelayakan Akademik / Ikhtisas','Surat Lantikan Perkhidmatan','Rekod / Sijil Kursus / Bengkel','Surat Panggilan Mesyuarat','LAIN LAIN'],
+    KURSUS: ['Senarai Semak KJ/KU PK1','Kalendar Akademik','Jadual Waktu (ATP)','Ringkasan Maklumat Kursus (RMK)','Induksi Kursus','Rancangan Pengajaran Semester (LAM-PT-03-01)','Rancangan Pengajaran Mingguan (LAM-PT-03-02)','Maklumat Pelajar','Rekod Kehadiran Pelajar','Rekod Pentaksiran Pelajar (JST/Rubrik/JSU)','Rekod Taklimat Pentaksiran','Borang LAM-PT-04-01','Bahan PdP','LAIN LAIN']
+  };
+}
+
+function toggleChecklist_(ss, user, b) {
+  const sh = ss.getSheetByName(APP.CHECKLIST);
+  const email = normalEmail_(user.Email);
+  const item = clean_(b.itemName, 180);
+  const status = clean_(b.status, 20);
+  
+  const all = rows_(sh);
+  const existing = all.find(r => normalEmail_(r.OwnerEmail) === email && r.ItemName === item);
+  
+  if (existing) {
+    sh.getRange(existing._row, 4).setValue(status);
+    sh.getRange(existing._row, 5).setValue(new Date().toISOString());
+  } else {
+    sh.appendRow([Utilities.getUuid(), email, item, status, new Date().toISOString()]);
+  }
+  return json_({ ok: true });
+}
+
+function getChecklistStatus_(ss, user) {
+  const sh = ss.getSheetByName(APP.CHECKLIST);
+  if (!sh) return {};
+  const rows = rows_(sh).filter(r => normalEmail_(r.OwnerEmail) === normalEmail_(user.Email));
+  const obj = {};
+  rows.forEach(r => { obj[r.ItemName] = r.Status; });
+  return obj;
+}
+
+/* ============ EOMS CHECKLIST ============ */
+function toggleEoms_(ss, user, b) {
+  if (user.Role !== 'Admin') return fail_('FORBIDDEN', 'Hanya Admin boleh menanda EOMS.');
+  const sh = ss.getSheetByName(APP.EOMS);
+  const email = normalEmail_(b.targetEmail);
+  const item = clean_(b.itemName, 200);
+  const status = clean_(b.status, 20);
+  
+  const all = rows_(sh);
+  const existing = all.find(r => normalEmail_(r.OwnerEmail) === email && r.ItemName === item);
+  
+  if (existing) {
+    sh.getRange(existing._row, 4).setValue(status);
+    sh.getRange(existing._row, 5).setValue(new Date().toISOString());
+  } else {
+    sh.appendRow([Utilities.getUuid(), email, item, status, new Date().toISOString()]);
+  }
+  return json_({ ok: true });
+}
+
+function getEomsStatus_(ss, user, b) {
+  if (user.Role !== 'Admin') return fail_('FORBIDDEN', 'Hanya Admin boleh melihat EOMS.');
+  const sh = ss.getSheetByName(APP.EOMS);
+  const email = normalEmail_(b.targetEmail);
+  const all = rows_(sh).filter(r => normalEmail_(r.OwnerEmail) === email);
+  const obj = {};
+  all.forEach(r => { obj[r.ItemName] = r.Status; });
+  return json_({ ok: true, eoms: obj });
+}
+
+/* ============ RECORDS ============ */
+
+function listRecords_(ss, user, b) {
+  const all = rows_(ss.getSheetByName(APP.RECORDS));
+  const mine = all.filter(r => normalEmail_(r.OwnerEmail) === normalEmail_(user.Email));
+  const checklist = getChecklistStatus_(ss, user);
+  return json_({ ok: true, records: mine.map(recordFromRow_), checklist: checklist });
+}
+
+function listAllRecords_(ss, user, b) {
+  if (user.Role !== 'Admin') return fail_('FORBIDDEN', 'Akses pentadbir diperlukan.');
+  const all = rows_(ss.getSheetByName(APP.RECORDS));
+  return json_({ ok: true, records: all.map(recordFromRow_) });
+}
+
+function saveRecord_(ss, user, b) {
+  const sh = ss.getSheetByName(APP.RECORDS);
+  const id = clean_(b.recordId, 80);
+  const owner = normalEmail_(user.Email);
+  const now = new Date().toISOString();
+  const values = [
+    id || Utilities.getUuid(), owner,
+    clean_(b.section, 30) || 'PROFIL',
+    clean_(b.tahun, 12), clean_(b.semester, 20),
+    clean_(b.kategori, 100), clean_(b.tajuk, 180),
+    clean_(b.keterangan, 1000),
+    clean_(b.fileUrl, 500), clean_(b.fileId, 120),
+    clean_(b.fileName, 180), clean_(b.fileMimeType, 100),
+    now, now
+  ];
+  if (!values[3] || !values[6]) return fail_('VALIDATION', 'Tahun dan tajuk rekod wajib diisi.');
+
+  const existing = rows_(sh).find(r => String(r.RecordId) === values[0]);
+  if (existing) {
+    if (normalEmail_(existing.OwnerEmail) !== owner && user.Role !== 'Admin') return fail_('FORBIDDEN', 'Anda tidak boleh mengubah rekod ini.');
+    values[12] = existing.CreatedAt || values[12];
+    sh.getRange(existing._row, 1, 1, values.length).setValues([values]);
+    audit_(ss, user.Email, 'UPDATE_RECORD', 'RECORD', values[0], values[6]);
+  } else {
+    sh.appendRow(values);
+    audit_(ss, user.Email, 'CREATE_RECORD', 'RECORD', values[0], values[6]);
+  }
+  return json_({ ok: true, record: recordFromRow_(rowFromValues_(values)) });
+}
+
+function deleteRecord_(ss, user, b) {
+  const sh = ss.getSheetByName(APP.RECORDS);
+  const found = rows_(sh).find(r => String(r.RecordId) === String(b.recordId));
+  if (!found) return fail_('NOT_FOUND', 'Rekod tidak ditemui.');
+  if (normalEmail_(found.OwnerEmail) !== normalEmail_(user.Email) && user.Role !== 'Admin') return fail_('FORBIDDEN', 'Anda tidak boleh memadam rekod ini.');
+  sh.deleteRow(found._row);
+  audit_(ss, user.Email, 'DELETE_RECORD', 'RECORD', found.RecordId, found.Tajuk);
+  return json_({ ok: true });
+}
+
+function updateProfile_(ss, user, b) {
+  const sh = ss.getSheetByName(APP.USERS);
+  const found = rows_(sh).find(r => normalEmail_(r.Email) === normalEmail_(user.Email));
+  if (!found) return fail_('NOT_FOUND', 'Profil tidak ditemui.');
+  const folder = getOrCreateUserFolder_(ss, found);
+  const vals = [
+    found.UserId, found.Email, found.PasswordHash,
+    clean_(b.namaPenuh, 120), clean_(b.noPekerja, 40),
+    clean_(b.gred, 40), clean_(b.jabatan, 120),
+    found.Role, clean_(b.fotoUrl, 500),
+    found.Status || 'Aktif', found.CreatedAt,
+    new Date().toISOString(),
+    folder.getId(), folder.getUrl()
+  ];
+  sh.getRange(found._row, 1, 1, vals.length).setValues([vals]);
+  const updated = userFromUserValues_(vals);
+  CacheService.getScriptCache().put('efolio_session_' + String(b.token), JSON.stringify(updated), 21600);
+  return json_({ ok: true, user: updated });
+}
+
+function uploadImage_(ss, user, b) {
+  const dataUrl = String(b.dataUrl || '');
+  const match = dataUrl.match(/^data:(image\/(?:png|jpeg|jpg|webp));base64,([A-Za-z0-9+/=]+)$/i);
+  if (!match) return fail_('VALIDATION', 'Foto mesti PNG, JPG atau WebP.');
+  const bytes = Utilities.base64Decode(match[2]);
+  if (bytes.length > 5 * 1024 * 1024) return fail_('VALIDATION', 'Saiz foto maksimum ialah 5 MB.');
+  const folder = getOrCreateUserFolder_(ss, user);
+  const saved = saveImageToFolder_(folder, dataUrl, '00_Foto_Profil', b.fileName || 'foto_profil');
+  audit_(ss, user.Email, 'UPLOAD_PROFILE_PHOTO', 'FILE', saved.file.getId(), 'Foto profil disimpan');
+  return json_({ ok: true, fileId: saved.file.getId(), fileName: saved.file.getName(), fileUrl: saved.url, fileMimeType: 'image/' + saved.ext });
+}
+
+function uploadMaterial_(ss, user, b) {
+  const dataUrl = String(b.dataUrl || '');
+  const match = dataUrl.match(/^data:(application\/pdf);base64,([A-Za-z0-9+/=]+)$/i);
+  if (!match) return fail_('VALIDATION', 'Bahan mesti dimuat naik dalam format PDF.');
+  const bytes = Utilities.base64Decode(match[2]);
+  if (bytes.length > 20 * 1024 * 1024) return fail_('VALIDATION', 'Saiz PDF maksimum ialah 20 MB.');
+  const folder = getOrCreateUserFolder_(ss, user);
+  const blob = Utilities.newBlob(bytes, 'application/pdf', safeFile_(b.fileName || 'bahan') + '.pdf');
+  const file = folder.createFile(blob);
+  try { file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW); } catch (ignored) {}
+  audit_(ss, user.Email, 'UPLOAD_MATERIAL_PDF', 'FILE', file.getId(), file.getName());
+  return json_({ ok: true, fileId: file.getId(), fileName: file.getName(), fileUrl: file.getUrl(), fileMimeType: 'application/pdf' });
+}
+
+function createLecturerFolder_(name, email) {
+  const parent = DriveApp.getFolderById(PropertiesService.getScriptProperties().getProperty('UPLOAD_FOLDER_ID'));
+  const folderName = safeFile_(name) + ' (' + email + ')';
+  const existing = parent.getFoldersByName(folderName);
+  if (existing.hasNext()) return existing.next();
+  return parent.createFolder(folderName);
+}
+
+function getOrCreateUserFolder_(ss, userRow) {
+  const sh = ss.getSheetByName(APP.USERS);
+  const found = userRow._row ? userRow : rows_(sh).find(r => normalEmail_(r.Email) === normalEmail_(userRow.Email));
+  
+  if (found && found.DriveFolderId) { 
+    try { 
+      return DriveApp.getFolderById(found.DriveFolderId); 
+    } catch (ignored) {} 
+  }
+  
+  const parentFolder = DriveApp.getFolderById(PropertiesService.getScriptProperties().getProperty('UPLOAD_FOLDER_ID'));
+  const folderName = safeFile_(found ? found.NamaPenuh : userRow.NamaPenuh) + ' (' + (found ? found.Email : userRow.Email) + ')';
+  const existingFolders = parentFolder.getFoldersByName(folderName);
+  
+  let folder;
+  if (existingFolders.hasNext()) {
+    folder = existingFolders.next();
+  } else {
+    folder = parentFolder.createFolder(folderName);
+  }
+  
+  if (found) { 
+    sh.getRange(found._row, 13).setValue(folder.getId()); 
+    sh.getRange(found._row, 14).setValue(folder.getUrl()); 
+  }
+  return folder;
+}
+
+function saveImageToFolder_(folder, dataUrl, prefix, fileName) {
+  const match = String(dataUrl).match(/^data:(image\/(?:png|jpeg|jpg|webp));base64,([A-Za-z0-9+/=]+)$/i);
+  if (!match) throw new Error('INVALID_IMAGE');
+  const bytes = Utilities.base64Decode(match[2]);
+  if (bytes.length > 5 * 1024 * 1024) throw new Error('IMAGE_TOO_LARGE');
+  
+  const ext = match[1].toLowerCase().replace('image/', '').replace('jpeg', 'jpg');
+  const finalName = safeFile_(prefix + '_' + fileName) + '.' + ext;
+  
+  const existingFiles = folder.getFilesByName(finalName);
+  while (existingFiles.hasNext()) {
+    existingFiles.next().setTrashed(true);
+  }
+
+  const blob = Utilities.newBlob(bytes, match[1], finalName);
+  const file = folder.createFile(blob);
+  try { file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW); } catch (ignored) {}
+  
+  const url = 'https://drive.google.com/thumbnail?id=' + file.getId() + '&sz=w1200';
+  return { file: file, url: url, ext: ext };
+}
+
+function listLecturers_(ss, user) {
+  if (user.Role !== 'Admin') return fail_('FORBIDDEN', 'Akses pentadbir diperlukan.');
+  return json_({ ok: true, lecturers: rows_(ss.getSheetByName(APP.USERS)).map(userFromRow_) });
+}
+
+function audit_(ss, actor, action, type, target, summary) {
+  ss.getSheetByName(APP.AUDIT).appendRow([Utilities.getUuid(), normalEmail_(actor), action, type, target, clean_(summary, 300), new Date().toISOString()]);
+}
+
+function rows_(sh) {
+  const last = sh.getLastRow(), cols = sh.getLastColumn();
+  if (last < 2) return [];
+  const headers = sh.getRange(1, 1, 1, cols).getValues()[0].map(String);
+  return sh.getRange(2, 1, last - 1, cols).getValues().map((vals, i) => {
+    const o = { _row: i + 2 };
+    headers.forEach((h, j) => o[h] = vals[j]);
+    return o;
+  });
+}
+
+function rowFromValues_(vals) {
+  const o = {};
+  HEADERS.APP_RECORDS.forEach((h, i) => o[h] = vals[i]);
+  return o;
+}
+function userFromRow_(r) {
+  return {
+    UserId: r.UserId, Email: r.Email, NamaPenuh: r.NamaPenuh,
+    NoPekerja: r.NoPekerja, Gred: r.Gred, Jabatan: r.Jabatan,
+    Role: r.Role, FotoUrl: r.FotoUrl || '',
+    Status: r.Status || 'Aktif',
+    DriveFolderId: r.DriveFolderId || '', DriveFolderUrl: r.DriveFolderUrl || ''
+  };
+}
+function userFromUserValues_(v) {
+  return {
+    UserId: v[0], Email: v[1], NamaPenuh: v[3], NoPekerja: v[4],
+    Gred: v[5], Jabatan: v[6], Role: v[7], FotoUrl: v[8] || '',
+    Status: v[9] || 'Aktif', DriveFolderId: v[12] || '', DriveFolderUrl: v[13] || ''
+  };
+}
+function recordFromRow_(r) {
+  return {
+    RecordId: r.RecordId, OwnerEmail: r.OwnerEmail, Section: r.Section,
+    Tahun: r.Tahun, Semester: r.Semester, Kategori: r.Kategori,
+    Tajuk: r.Tajuk, Keterangan: r.Keterangan,
+    FileUrl: r.FileUrl, FileId: r.FileId, FileName: r.FileName,
+    FileMimeType: r.FileMimeType, CreatedAt: r.CreatedAt, UpdatedAt: r.UpdatedAt
+  };
+}
+function normalEmail_(v) { const s = String(v || '').trim().toLowerCase(); return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(s) ? s : ''; }
+function clean_(v, max) { return String(v || '').trim().slice(0, max); }
+function safeFile_(v) { return clean_(v, 80).replace(/[^\w\- ]/g, '_') || 'fail'; }
+function hash_(raw) { return Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, String(raw), Utilities.Charset.UTF_8).map(b => (b < 0 ? b + 256 : b).toString(16).padStart(2, '0')).join(''); }
+function json_(data) { return ContentService.createTextOutput(JSON.stringify(data)).setMimeType(ContentService.MimeType.JSON); }
+function fail_(code, message) { return json_({ ok: false, code: code, error: message }); }
+```
+
+---
+
+### 📄 2. Index.html (Frontend — Penuh)
+
+*(Sila salin semula fail HTML yang sama dari jawapan saya sebelum ini, kerana ia sudah dikemas kini dengan pembetulan penapis dan EOMS. Untuk memastikan pakej ini lengkap, saya sertakan sekali lagi di bawah).*
+
+```html
+<!doctype html>
+<html lang="ms">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>E-Folio Pensyarah IPG</title>
+<link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<style>
+:root {
+  --font-main: 'Plus Jakarta Sans', sans-serif;
+  --bg-app: #f1f5f9;
+  --bg-card: #ffffff;
+  --bg-sidebar: #0f172a;
+  --text-main: #1e293b;
+  --text-muted: #64748b;
+  --primary: #1e40af;
+  --primary-light: #eff6ff;
+  --accent: #f59e0b;
+  --success: #10b981;
+  --danger: #ef4444;
+  --border: #e2e8f0;
+  --shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05), 0 2px 4px -2px rgba(0, 0, 0, 0.05);
+  --radius: 16px;
+}
+
+* { box-sizing: border-box; }
+body { 
+  margin: 0; font-family: var(--font-main); background: var(--bg-app); color: var(--text-main); 
+  -webkit-user-select: none; -moz-user-select: none; -ms-user-select: none; user-select: none;
+}
+button, input, select, textarea { font-family: inherit; }
+button { cursor: pointer; border: none; }
+.hidden { display: none !important; }
+
+/* AUTH */
+.auth-container { min-height: 100vh; display: flex; flex-direction: column; align-items: center; justify-content: center; background: linear-gradient(135deg, #1e3a8a, #0f172a); padding: 20px; }
+.auth-card { background: var(--bg-card); padding: 40px; border-radius: var(--radius); box-shadow: 0 20px 25px -5px rgba(0,0,0,0.2); width: min(480px, 100%); max-height: 85vh; overflow-y: auto; }
+.auth-logo { text-align: center; margin-bottom: 25px; }
+.auth-logo img { height: 80px; margin-bottom: 15px; }
+.auth-logo h1 { margin: 0; font-size: 24px; font-weight: 800; color: var(--primary); }
+.auth-logo p { margin: 5px 0 0; color: var(--text-muted); font-size: 14px; }
+.auth-footer { margin-top: 20px; text-align: center; color: #94a3b8; font-size: 11px; line-height: 1.5; max-width: 480px; }
+
+/* FORMS & BUTTONS */
+.form-group { margin-bottom: 20px; }
+.form-group label { display: block; font-size: 13px; font-weight: 700; margin-bottom: 8px; color: var(--text-main); }
+.form-control { width: 100%; padding: 12px 15px; border: 1px solid var(--border); border-radius: 8px; background: #f8fafc; color: var(--text-main); font-size: 14px; transition: border 0.2s; }
+.form-control:focus { outline: none; border-color: var(--primary); background: #fff; box-shadow: 0 0 0 3px rgba(30, 64, 175, 0.1); }
+.btn { padding: 12px 20px; border-radius: 8px; font-weight: 700; font-size: 14px; display: inline-flex; align-items: center; justify-content: center; gap: 8px; transition: all 0.2s; }
+.btn-primary { background: var(--primary); color: #fff; }
+.btn-primary:hover { background: #1e3a8a; }
+.btn-outline { background: transparent; border: 1px solid var(--border); color: var(--text-main); }
+.btn-outline:hover { background: var(--bg-app); }
+.btn-danger { background: var(--danger); color: #fff; }
+.btn-success { background: var(--success); color: #fff; }
+.btn-warning { background: #f59e0b; color: #fff; }
+.btn-sm { padding: 6px 12px; font-size: 12px; border-radius: 6px; }
+.link-text { color: var(--primary); font-weight: bold; text-decoration: none; cursor: pointer; }
+.link-text:hover { text-decoration: underline; }
+
+/* LAYOUT */
+.app-layout { display: flex; min-height: 100vh; }
+.sidebar { width: 250px; background: var(--bg-sidebar); color: #fff; display: flex; flex-direction: column; position: fixed; height: 100vh; z-index: 10; }
+.sidebar-brand { padding: 24px; display: flex; align-items: center; gap: 12px; border-bottom: 1px solid rgba(255,255,255,0.1); }
+.sidebar-brand img { height: 40px; background: #fff; padding: 4px; border-radius: 8px; }
+.sidebar-brand div { font-weight: 800; font-size: 15px; line-height: 1.2; }
+.sidebar-menu { padding: 20px 10px; flex: 1; display: flex; flex-direction: column; gap: 5px; }
+.menu-item { display: flex; align-items: center; gap: 12px; padding: 14px 15px; border-radius: 10px; color: #cbd5e1; text-decoration: none; font-weight: 600; font-size: 14px; transition: all 0.2s; background: transparent; width: 100%; text-align: left; }
+.menu-item:hover, .menu-item.active { background: rgba(255,255,255,0.1); color: #fff; }
+.menu-item.active { border-left: 4px solid var(--accent); background: rgba(255,255,255,0.15); }
+.menu-item svg { width: 20px; height: 20px; fill: currentColor; }
+.sidebar-footer { padding: 15px; font-size: 10px; color: #64748b; text-align: center; border-top: 1px solid rgba(255,255,255,0.1); line-height: 1.4; }
+.main-wrapper { flex: 1; margin-left: 250px; display: flex; flex-direction: column; }
+.topbar { background: var(--bg-card); padding: 15px 30px; display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--border); position: sticky; top: 0; z-index: 5; }
+.topbar-title { font-size: 20px; font-weight: 800; }
+.content-area { padding: 30px; display: flex; gap: 25px; align-items: flex-start; }
+
+/* PROFILE CARD */
+.profile-panel { width: 320px; flex-shrink: 0; background: var(--bg-card); border-radius: var(--radius); box-shadow: var(--shadow); border: 1px solid var(--border); overflow: hidden; position: sticky; top: 90px; }
+.profile-cover { height: 100px; background: linear-gradient(135deg, var(--primary), #3b82f6); }
+.profile-header { padding: 0 24px 24px; text-align: center; margin-top: -50px; }
+.profile-avatar-wrapper { position: relative; display: inline-block; margin-bottom: 15px; }
+.profile-avatar { width: 100px; height: 100px; border-radius: 50%; object-fit: cover; border: 4px solid var(--bg-card); box-shadow: 0 4px 6px rgba(0,0,0,0.1); background: #fff; pointer-events: none; }
+.profile-name { margin: 0 0 5px; font-size: 20px; font-weight: 800; color: var(--text-main); }
+.profile-role { margin: 0 0 15px; font-size: 13px; font-weight: 700; color: var(--primary); text-transform: uppercase; letter-spacing: 0.5px; background: var(--primary-light); display: inline-block; padding: 4px 12px; border-radius: 20px; }
+.profile-details { border-top: 1px solid var(--border); padding-top: 20px; text-align: left; display: flex; flex-direction: column; gap: 15px; }
+.detail-item { display: flex; align-items: flex-start; gap: 12px; font-size: 13px; }
+.detail-item svg { width: 18px; height: 18px; fill: var(--text-muted); flex-shrink: 0; margin-top: 2px; }
+.detail-label { color: var(--text-muted); font-weight: 600; font-size: 11px; text-transform: uppercase; margin-bottom: 2px; }
+.detail-value { color: var(--text-main); font-weight: 700; word-break: break-all; }
+.btn-edit-profile { width: 100%; margin-top: 25px; }
+
+/* RIGHT CONTENT */
+.content-panel { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 20px; }
+.stats-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 15px; }
+.stat-card { background: var(--bg-card); padding: 20px; border-radius: var(--radius); box-shadow: var(--shadow); border: 1px solid var(--border); display: flex; align-items: center; gap: 15px; }
+.stat-icon { width: 48px; height: 48px; border-radius: 12px; background: var(--primary-light); color: var(--primary); display: flex; align-items: center; justify-content: center; }
+.stat-icon svg { width: 24px; height: 24px; fill: currentColor; }
+.stat-info h3 { margin: 0 0 5px; font-size: 24px; font-weight: 800; line-height: 1; }
+.stat-info p { margin: 0; font-size: 12px; color: var(--text-muted); font-weight: 600; }
+.card { background: var(--bg-card); border-radius: var(--radius); box-shadow: var(--shadow); border: 1px solid var(--border); overflow: hidden; }
+.card-header { padding: 20px; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 15px; }
+.card-title { margin: 0; font-size: 16px; font-weight: 800; display: flex; align-items: center; gap: 10px; }
+.card-tools { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+.table-responsive { overflow-x: auto; }
+table { width: 100%; border-collapse: collapse; text-align: left; }
+th { background: #f8fafc; padding: 14px 20px; font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; color: var(--text-muted); font-weight: 800; border-bottom: 1px solid var(--border); }
+td { padding: 16px 20px; border-bottom: 1px solid var(--border); font-size: 13px; vertical-align: middle; }
+tr:last-child td { border-bottom: none; }
+.title-main { font-weight: 800; color: var(--text-main); margin-bottom: 4px; }
+.sub-text { font-size: 12px; color: var(--text-muted); }
+.badge { padding: 4px 10px; border-radius: 20px; font-size: 11px; font-weight: 800; display: inline-block; }
+.badge-primary { background: var(--primary-light); color: var(--primary); }
+.badge-success { background: #dcfce7; color: #166534; }
+.badge-danger { background: #fee2e2; color: #991b1b; }
+.badge-warning { background: #fef3c7; color: #b45309; }
+.grid-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 15px; padding: 20px; }
+.list-item { padding: 15px; border: 1px solid var(--border); border-radius: 12px; display: flex; align-items: center; gap: 15px; background: #fff; }
+.list-item.uploaded { border-left: 4px solid var(--success); }
+.list-item.missing { border-left: 4px solid var(--danger); }
+
+/* MODALS */
+.modal-overlay { position: fixed; inset: 0; background: rgba(15, 23, 42, 0.6); backdrop-filter: blur(4px); display: flex; align-items: center; justify-content: center; z-index: 100; padding: 20px; }
+.modal-box { background: var(--bg-card); width: min(600px, 100%); border-radius: var(--radius); box-shadow: 0 25px 50px -12px rgba(0,0,0,0.25); max-height: 90vh; overflow-y: auto; display: flex; flex-direction: column; }
+.modal-header { padding: 20px 24px; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; position: sticky; top: 0; background: var(--bg-card); z-index: 1; }
+.modal-header h3 { margin: 0; font-size: 18px; }
+.close-btn { background: transparent; color: var(--text-muted); font-size: 24px; line-height: 1; }
+.modal-body { padding: 24px; }
+.modal-footer { padding: 20px 24px; border-top: 1px solid var(--border); display: flex; justify-content: flex-end; gap: 10px; background: #f8fafc; position: sticky; bottom: 0; }
+
+/* PRINT STYLES */
+@media print {
+  body * { visibility: hidden; }
+  #printArea, #printArea * { visibility: visible; }
+  #printArea { position: absolute; left: 0; top: 0; width: 100%; padding: 20px; background: white; color: black; }
+  .no-print { display: none !important; }
+}
+
+/* RESPONSIVE */
+@media (max-width: 1100px) {
+  .content-area { flex-direction: column; }
+  .profile-panel { width: 100%; position: static; display: flex; text-align: left; align-items: center; padding: 20px; gap: 20px; }
+  .profile-cover { display: none; }
+  .profile-header { margin-top: 0; padding: 0; text-align: left; display: flex; align-items: center; gap: 20px; width: 100%; }
+  .profile-avatar-wrapper { margin-bottom: 0; }
+  .profile-details { border-top: none; padding-top: 0; flex-direction: row; flex-wrap: wrap; margin-left: auto; }
+  .btn-edit-profile { width: auto; margin-top: 0; }
+}
+@media (max-width: 768px) {
+  .sidebar { width: 100%; height: auto; position: relative; flex-direction: row; overflow-x: auto; padding: 10px; }
+  .sidebar-brand { display: none; }
+  .sidebar-menu { flex-direction: row; padding: 0; }
+  .menu-item span { display: block; font-size: 12px; }
+  .main-wrapper { margin-left: 0; }
+  .profile-header { flex-direction: column; text-align: center; }
+  .profile-details { justify-content: center; text-align: center; }
+  .stats-grid { grid-template-columns: 1fr; }
+  .sidebar-footer { display: none; }
+}
+</style>
+</head>
+<body>
+
+<!-- AUTH -->
+<div id="authView" class="auth-container no-print">
+  <div class="auth-card">
+    <div class="auth-logo">
+      <img src="https://imgur.com/HfCmzEY.png" alt="Logo IPG" onerror="this.src='https://upload.wikimedia.org/wikipedia/commons/thumb/9/9e/Logo_Kementerian_Pendidikan_Malaysia.svg/1200px-Logo_Kementerian_Pendidikan_Malaysia.svg.png'">
+      <h1 id="authTitle">E-Folio IPG</h1>
+      <p id="authSubtitle">Sistem Pengurusan Folio Pensyarah</p>
+    </div>
+    <div id="authMsg" class="form-group hidden" style="font-size: 13px; font-weight: bold; text-align: center;"></div>
+
+    <form id="loginForm">
+      <div class="form-group">
+        <label>Emel Rasmi</label>
+        <input id="loginEmail" type="email" class="form-control" required placeholder="nama@ipgm.edu.my">
+      </div>
+      <div class="form-group">
+        <label>Kata Laluan</label>
+        <input id="loginPassword" type="password" class="form-control" required placeholder="••••••••">
+      </div>
+      <div style="text-align: right; margin-bottom: 15px;">
+        <a href="#" onclick="toggleAuth('forgot'); return false;" class="link-text" style="font-size: 12px;">Lupa Kata Laluan?</a>
+      </div>
+      <button type="submit" class="btn btn-primary" style="width: 100%;" id="loginBtn">Log Masuk</button>
+    </form>
+
+    <form id="registerForm" class="hidden">
+      <div class="form-group">
+        <label>Nama Penuh</label>
+        <input id="regName" type="text" class="form-control" required placeholder="Nama Penuh Anda">
+      </div>
+      <div class="form-group">
+        <label>Emel Rasmi</label>
+        <input id="regEmail" type="email" class="form-control" required placeholder="nama@ipgm.edu.my">
+      </div>
+      <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px;">
+        <div class="form-group">
+          <label>No. Pekerja</label>
+          <input id="regStaff" type="text" class="form-control" placeholder="Cth: 123456">
+        </div>
+        <div class="form-group">
+          <label>Gred</label>
+          <input id="regGrade" type="text" class="form-control" placeholder="Cth: DG41">
+        </div>
+      </div>
+      <div class="form-group">
+        <label>Jabatan / Unit</label>
+        <select id="regDept" class="form-control" required>
+          <option value="">-- Pilih Jabatan / Unit --</option>
+          <optgroup label="Sektor Kecemerlangan Akademik">
+            <option value="Sekretariat Jaminan Kualiti & Pematuhan Polisi">Sekretariat Jaminan Kualiti & Pematuhan Polisi (SJKPP)</option>
+            <option value="Jabatan Kecemerlangan Akademik">Jabatan Kecemerlangan Akademik (JKA)</option>
+            <option value="Jabatan Perancangan, Penyelidikan dan Inovasi">Jabatan Perancangan, Penyelidikan dan Inovasi (JPPI)</option>
+            <option value="Jabatan Hal Ehwal Pelajar">Jabatan Hal Ehwal Pelajar (JHEP)</option>
+            <option value="Jabatan Ilmu Pendidikan">Jabatan Ilmu Pendidikan (JIP)</option>
+            <option value="Jabatan Bimbingan dan Kaunseling">Jabatan Bimbingan dan Kaunseling (JBK)</option>
+            <option value="Jabatan Pendidikan Islam dan Moral">Jabatan Pendidikan Islam dan Moral (JPIM)</option>
+            <option value="Jabatan Bahasa Arab">Jabatan Bahasa Arab (JBA)</option>
+            <option value="Jabatan Pendidikan Khas">Jabatan Pendidikan Khas (JPK)</option>
+            <option value="Jabatan Pengajian Melayu">Jabatan Pengajian Melayu (JPM)</option>
+            <option value="Jabatan Sains Sosial">Jabatan Sains Sosial</option>
+            <option value="Jabatan Matematik dan Sains">Jabatan Matematik dan Sains</option>
+            <option value="Jabatan Pengajian Inggeris">Jabatan Pengajian Inggeris</option>
+            <option value="Jabatan Seni Visual dan Muzik">Jabatan Seni Visual dan Muzik</option>
+            <option value="Jabatan Pendidikan Jasmani dan Kesihatan">Jabatan Pendidikan Jasmani dan Kesihatan</option>
+            <option value="Unit Kokurikulum">Unit Kokurikulum</option>
+          </optgroup>
+        </select>
+      </div>
+      <div class="form-group">
+        <label>Kata Laluan (Min 8 aksara)</label>
+        <input id="regPassword" type="password" class="form-control" required placeholder="••••••••">
+      </div>
+      <div class="form-group" style="background: #f8fafc; padding: 15px; border-radius: 8px; border: 1px dashed var(--border);">
+        <label style="margin-bottom: 5px;">Foto Profil (Pilihan)</label>
+        <input id="regPhoto" type="file" accept="image/*" style="font-size: 13px;">
+        <img id="regPreview" class="hidden" style="max-width: 60px; margin-top: 10px; border-radius: 8px;">
+      </div>
+      <button type="submit" class="btn btn-primary" style="width: 100%;" id="regBtn">Daftar Akaun</button>
+    </form>
+
+    <form id="forgotForm" class="hidden">
+      <p style="font-size: 13px; color: var(--text-muted); margin-bottom: 20px; text-align: center;">Masukkan emel rasmi anda. Kami akan menghantar pautan untuk set semula kata laluan.</p>
+      <div class="form-group">
+        <label>Emel Rasmi</label>
+        <input id="forgotEmail" type="email" class="form-control" required placeholder="nama@ipgm.edu.my">
+      </div>
+      <button type="submit" class="btn btn-primary" style="width: 100%;" id="forgotBtn">Hantar Pautan</button>
+    </form>
+
+    <form id="resetForm" class="hidden">
+      <p style="font-size: 13px; color: var(--text-muted); margin-bottom: 20px; text-align: center;">Sila masukkan kata laluan baharu anda (minimum 8 aksara).</p>
+      <input type="hidden" id="resetToken">
+      <div class="form-group">
+        <label>Kata Laluan Baharu</label>
+        <input id="resetPassword" type="password" class="form-control" required minlength="8" placeholder="••••••••">
+      </div>
+      <div class="form-group">
+        <label>Sahkan Kata Laluan</label>
+        <input id="resetPassword2" type="password" class="form-control" required minlength="8" placeholder="••••••••">
+      </div>
+      <button type="submit" class="btn btn-primary" style="width: 100%;" id="resetBtn">Simpan Kata Laluan</button>
+    </form>
+
+    <div style="text-align: center; margin-top: 20px; font-size: 13px; color: var(--text-muted);" id="authToggleArea">
+      <span id="toggleText">Belum ada akaun?</span> 
+      <a href="#" onclick="toggleAuth('register'); return false;" class="link-text" id="toggleLink">Daftar di sini</a>
+    </div>
+  </div>
+  
+  <div class="auth-footer">
+    <b>HAKCIPTA & PENAFIAN:</b><br>
+    Hak Cipta Terpelihara &copy; 2026 Haniff Faizal Bin Chek Ani, Unit Kokurikulum, IPG Kampus Darulaman.<br>
+    Aplikasi ini adalah untuk kegunaan rasmi IPG Kampus Darulaman sahaja. Sebarang percubaan menggodam, menyalin kod, atau menyebarkan pautan tanpa kebenaran adalah dilarang sama sekali.
+  </div>
+</div>
+
+<!-- APP DASHBOARD -->
+<div id="appView" class="app-layout hidden">
+  
+  <aside class="sidebar no-print">
+    <div class="sidebar-brand">
+      <img src="https://imgur.com/HfCmzEY.png" alt="Logo IPG" onerror="this.style.display='none'">
+      <div>E-FOLIO<br><span style="font-size: 10px; font-weight: 400; opacity: 0.7;">IPG Kampus Darulaman</span></div>
+    </div>
+    <div class="sidebar-menu">
+      <button class="menu-item active" data-section="PROFIL" id="menuBtnProfil" onclick="setSection('PROFIL')">
+        <svg viewBox="0 0 24 24"><path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z"/></svg>
+        <span>Folio Pensyarah</span>
+      </button>
+      <button class="menu-item" data-section="KURSUS" id="menuBtnKursus" onclick="setSection('KURSUS')">
+        <svg viewBox="0 0 24 24"><path d="M4 6H2v14c0 1.1.9 2 2 2h14v-2H4V6zm16-4H8c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm-1 9H9V9h10v2zm-4 4H9v-2h6v2zm4-8H9V5h10v2z"/></svg>
+        <span>Folio Kursus</span>
+      </button>
+      <button class="menu-item" data-section="SEMAK" id="menuBtnSemak" onclick="setSection('SEMAK')">
+        <svg viewBox="0 0 24 24"><path d="M19 3h-4.18C14.4 1.84 13.3 1 12 1c-1.3 0-2.4.84-2.82 2H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm-7 0c.55 0 1 .45 1 1s-.45 1-1 1-1-.45-1-1 .45-1 1-1zm-2 14l-4-4 1.41-1.41L10 14.17l6.59-6.59L18 9l-8 8z"/></svg>
+        <span>Senarai Semak Audit</span>
+      </button>
+      <button class="menu-item" data-section="STATISTIK" id="menuBtnStatistik" onclick="setSection('STATISTIK')">
+        <svg viewBox="0 0 24 24"><path d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zM9 17H7v-7h2v7zm4 0h-2V7h2v10zm4 0h-2v-4h2v4z"/></svg>
+        <span>Statistik Bahan</span>
+      </button>
+      
+      <!-- Menu Khas Admin -->
+      <button class="menu-item hidden" id="menuAdmin" data-section="ADMIN" onclick="setSection('ADMIN')">
+        <svg viewBox="0 0 24 24"><path d="M12 1L3 5v6c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V5l-9-4zm0 10.99h7c-.53 4.12-3.28 7.79-7 8.94V12H5V6.3l7-3.11v8.8z"/></svg>
+        <span>Panel Pemantau</span>
+      </button>
+      <button class="menu-item hidden" id="menuEoms" data-section="EOMS" onclick="setSection('EOMS')">
+        <svg viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/></svg>
+        <span>Senarai Semak EOMS</span>
+      </button>
+    </div>
+    <div class="sidebar-footer">
+      <b>HAKCIPTA TERPELIHARA</b><br>
+      &copy; 2026 Haniff Faizal Bin Chek Ani<br>Unit Kokurikulum, IPGKDA.
+    </div>
+  </aside>
+
+  <main class="main-wrapper">
+    <header class="topbar no-print">
+      <div class="topbar-title" id="pageTitle">Folio Pensyarah</div>
+      <div style="display: flex; gap: 10px; align-items: center;">
+        <span style="font-weight: 700; font-size: 14px; margin-right: 10px;" id="userNameTop">Nama</span>
+        <button class="btn btn-outline btn-sm" onclick="logout()">Log Keluar</button>
+      </div>
+    </header>
+
+    <div class="content-area">
+      
+      <div class="profile-panel no-print" id="mainProfilePanel">
+        <div class="profile-cover"></div>
+        <div class="profile-header">
+          <div class="profile-avatar-wrapper">
+            <img id="profileAvatar" class="profile-avatar" src="" alt="Profile">
+          </div>
+          <h2 id="profileName" class="profile-name">Nama Pensyarah</h2>
+          <div id="profileRole" class="profile-role">Pensyarah</div>
+          
+          <div class="profile-details">
+            <div class="detail-item">
+              <svg viewBox="0 0 24 24"><path d="M20 4H4c-1.1 0-1.99.9-1.99 2L2 18c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zm0 4l-8 5-8-5V6l8 5 8-5v2z"/></svg>
+              <div><div class="detail-label">Emel Rasmi</div><div class="detail-value" id="profileEmail">emel@ipgm.edu.my</div></div>
+            </div>
+            <div class="detail-item">
+              <svg viewBox="0 0 24 24"><path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z"/></svg>
+              <div><div class="detail-label">No. Pekerja & Gred</div><div class="detail-value" id="profileStaff">-</div></div>
+            </div>
+            <div class="detail-item">
+              <svg viewBox="0 0 24 24"><path d="M12 7V3H2v18h20V7H12zM6 19H4v-2h2v2zm0-4H4v-2h2v2zm0-4H4V9h2v2zm0-4H4V5h2v2zm4 12H8v-2h2v2zm0-4H8v-2h2v2zm0-4H8V9h2v2zm0-4H8V5h2v2zm10 12h-8v-2h2v-2h-2v-2h2v-2h-2V9h8v10zm-2-8h-2v2h2v-2zm0 4h-2v2h2v-2z"/></svg>
+              <div><div class="detail-label">Jabatan / Unit</div><div class="detail-value" id="profileDept">-</div></div>
+            </div>
+          </div>
+          
+          <button class="btn btn-outline btn-edit-profile" id="btnEditProfile" onclick="openProfile()">Kemaskini Profil</button>
+        </div>
+      </div>
+
+      <div class="content-panel">
+        
+        <div class="stats-grid no-print" id="mainStatsGrid">
+          <div class="stat-card"><div class="stat-icon"><svg viewBox="0 0 24 24"><path d="M20 6h-8l-2-2H4c-1.1 0-1.99.9-1.99 2L2 18c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2zm0 12H4V8h16v10z"/></svg></div><div class="stat-info"><h3 id="statRecords">0</h3><p>Jumlah Rekod</p></div></div>
+          <div class="stat-card"><div class="stat-icon" style="background:#fef3c7; color:#d97706;"><svg viewBox="0 0 24 24"><path d="M21 19V5c0-1.1-.9-2-2-2H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2zM8.5 13.5l2.5 3.01L14.5 12l4.5 6H5l3.5-4.5z"/></svg></div><div class="stat-info"><h3 id="statImages">0</h3><p>Gambar Dimuat Naik</p></div></div>
+          <div class="stat-card"><div class="stat-icon" style="background:#dcfce7; color:#15803d;"><svg viewBox="0 0 24 24"><path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z"/></svg></div><div class="stat-info"><h3 id="statLecturers">0</h3><p>Jumlah Pensyarah</p></div></div>
+        </div>
+
+        <div id="viewTable" class="card">
+          <div class="card-header">
+            <h3 class="card-title" id="tableSectionTitle"><svg viewBox="0 0 24 24"><path d="M3 13h2v-2H3v2zm0 4h2v-2H3v2zm0-8h2V7H3v2zm4 4h14v-2H7v2zm0 4h14v-2H7v2zM7 7v2h14V7H7z"/></svg> Senarai Rekod</h3>
+            <div class="card-tools no-print">
+              <select id="yearFilter" class="form-control" style="width: auto; padding: 8px 12px;" onchange="render()"><option value="">Semua Tahun</option></select>
+              <select id="semFilter" class="form-control" style="width: auto; padding: 8px 12px;" onchange="render()"><option value="">Semua Sem</option><option value="I">Sem I</option><option value="II">Sem II</option><option value="III">Sem III</option></select>
+              <button class="btn btn-primary btn-sm" onclick="openRecord()">+ Tambah Rekod</button>
+            </div>
+          </div>
+          <div class="card-body table-responsive">
+            <table>
+              <thead><tr><th>Tahun / Sem</th><th>Kategori</th><th>Maklumat Dokumen</th><th>Bahan</th><th class="no-print" style="text-align: right;">Tindakan</th></tr></thead>
+              <tbody id="recordsBody"></tbody>
+            </table>
+            <div id="emptyTable" class="hidden" style="text-align: center; padding: 40px; color: var(--text-muted);">Tiada rekod ditemui.</div>
+          </div>
+        </div>
+
+        <div id="viewSemak" class="card hidden">
+          <div class="card-header"><h3 class="card-title"><svg viewBox="0 0 24 24"><path d="M19 3h-4.18C14.4 1.84 13.3 1 12 1c-1.3 0-2.4.84-2.82 2H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm-7 0c.55 0 1 .45 1 1s-.45 1-1 1-1-.45-1-1 .45-1 1-1zm-2 14l-4-4 1.41-1.41L10 14.17l6.59-6.59L18 9l-8 8z"/></svg> Senarai Semak Audit (Format PDF)</h3></div>
+          <div class="card-body table-responsive"><table id="auditTable"></table></div>
+        </div>
+
+        <div id="viewStatistik" class="card hidden">
+          <div class="card-header"><h3 class="card-title"><svg viewBox="0 0 24 24"><path d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zM9 17H7v-7h2v7zm4 0h-2V7h2v10zm4 0h-2v-4h2v4z"/></svg> Pengiraan Bahan Mengikut Kategori</h3></div>
+          <div id="statsContainer" class="grid-list"></div>
+        </div>
+
+        <!-- PANEL ADMIN (PEMANTAU) - SENARAI PENSYARAH -->
+        <div id="viewAdmin" class="card hidden">
+          <div class="card-header" style="background: #f8fafc; border-bottom: 2px solid var(--primary); flex-direction: column; align-items: flex-start;">
+            <h3 class="card-title" style="color: var(--primary); margin-bottom: 15px;">Senarai Pensyarah (Pemantau)</h3>
+            <div style="display: flex; gap: 10px; flex-wrap: wrap; width: 100%;">
+              <select id="adminDeptFilter" class="form-control" style="width: auto; padding: 8px 12px;" onchange="renderAdminTable()">
+                <option value="">-- Semua Jabatan --</option>
+                <optgroup label="Sektor Kecemerlangan Akademik">
+                  <option value="Sekretariat Jaminan Kualiti & Pematuhan Polisi">Sekretariat Jaminan Kualiti & Pematuhan Polisi (SJKPP)</option>
+                  <option value="Jabatan Kecemerlangan Akademik">Jabatan Kecemerlangan Akademik (JKA)</option>
+                  <option value="Jabatan Perancangan, Penyelidikan dan Inovasi">Jabatan Perancangan, Penyelidikan dan Inovasi (JPPI)</option>
+                  <option value="Jabatan Hal Ehwal Pelajar">Jabatan Hal Ehwal Pelajar (JHEP)</option>
+                  <option value="Jabatan Ilmu Pendidikan">Jabatan Ilmu Pendidikan (JIP)</option>
+                  <option value="Jabatan Bimbingan dan Kaunseling">Jabatan Bimbingan dan Kaunseling (JBK)</option>
+                  <option value="Jabatan Pendidikan Islam dan Moral">Jabatan Pendidikan Islam dan Moral (JPIM)</option>
+                  <option value="Jabatan Bahasa Arab">Jabatan Bahasa Arab (JBA)</option>
+                  <option value="Jabatan Pendidikan Khas">Jabatan Pendidikan Khas (JPK)</option>
+                  <option value="Jabatan Pengajian Melayu">Jabatan Pengajian Melayu (JPM)</option>
+                  <option value="Jabatan Sains Sosial">Jabatan Sains Sosial</option>
+                  <option value="Jabatan Matematik dan Sains">Jabatan Matematik dan Sains</option>
+                  <option value="Jabatan Pengajian Inggeris">Jabatan Pengajian Inggeris</option>
+                  <option value="Jabatan Seni Visual dan Muzik">Jabatan Seni Visual dan Muzik</option>
+                  <option value="Jabatan Pendidikan Jasmani dan Kesihatan">Jabatan Pendidikan Jasmani dan Kesihatan</option>
+                  <option value="Unit Kokurikulum">Unit Kokurikulum</option>
+                </optgroup>
+              </select>
+              
+              <select id="adminYearFilter" class="form-control" style="width: auto; padding: 8px 12px;" onchange="renderAdminTable()">
+                <option value="">Semua Tahun</option>
+              </select>
+              
+              <select id="adminSemFilter" class="form-control" style="width: auto; padding: 8px 12px;" onchange="renderAdminTable()">
+                <option value="">Semua Semester</option>
+                <option value="I">I</option><option value="II">II</option><option value="III">III</option>
+              </select>
+            </div>
+          </div>
+          <div class="card-body">
+            <div class="table-responsive">
+              <table>
+                <thead><tr><th>Nama Pensyarah</th><th>Jabatan / Unit</th><th style="text-align:center;">Jumlah Bahan</th><th style="text-align:center;">Belum Dimuat Naik</th><th style="text-align:right;">Tindakan</th></tr></thead>
+                <tbody id="adminRecordsBody"></tbody>
+              </table>
+              <div id="adminEmpty" class="hidden" style="text-align: center; padding: 40px; color: var(--text-muted);">Tiada pensyarah ditemui.</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- HALAMAN BUTIRAN PENSYARAH (ADMIN KLIK NAMA) -->
+        <div id="viewAdminDetail" class="card hidden">
+          <div class="card-header" style="background: #e0e7ff; border-bottom: 2px solid var(--primary); display: flex; justify-content: space-between; align-items: center;">
+            <div style="display: flex; align-items: center; gap: 15px;">
+              <img id="adminDetailAvatar" style="width: 50px; height: 50px; border-radius: 50%; object-fit: cover; border: 2px solid var(--primary);" src="" alt="Foto">
+              <div>
+                <h3 class="card-title" style="color: var(--primary); font-size: 18px;" id="adminDetailName">Nama Pensyarah</h3>
+                <div class="sub-text" id="adminDetailMeta" style="margin-top:5px;">Jabatan / Unit</div>
+              </div>
+            </div>
+            <button class="btn btn-outline btn-sm" onclick="setSection('ADMIN')">← Kembali ke Senarai</button>
+          </div>
+          <div class="card-body">
+            <div style="padding: 15px; background: #f8fafc; border-bottom: 1px solid var(--border); display: flex; gap: 10px; flex-wrap: wrap;">
+              <select id="adminDetailYearFilter" class="form-control" style="width: auto; padding: 8px 12px;" onchange="renderAdminDetailTable()">
+                <option value="">Semua Tahun</option>
+              </select>
+              <select id="adminDetailSemFilter" class="form-control" style="width: auto; padding: 8px 12px;" onchange="renderAdminDetailTable()">
+                <option value="">Semua Semester</option>
+                <option value="I">I</option><option value="II">II</option><option value="III">III</option>
+              </select>
+            </div>
+            <div class="table-responsive">
+              <table>
+                <thead><tr><th>Tahun / Sem</th><th>Folio</th><th>Kategori</th><th>Maklumat</th><th>Bahan</th></tr></thead>
+                <tbody id="adminDetailBody"></tbody>
+              </table>
+              <div id="adminDetailEmpty" class="hidden" style="text-align: center; padding: 40px; color: var(--text-muted);">Tiada rekod ditemui untuk tapisan ini.</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 5. SENARAI SEMAK EOMS (KHAS ADMIN) -->
+        <div id="viewEoms" class="card hidden">
+          <div class="card-header" style="background: #f8fafc; border-bottom: 2px solid var(--primary); flex-wrap: wrap; gap: 10px;">
+            <h3 class="card-title" style="color: var(--primary);">Senarai Semak EOMS PT-03</h3>
+            <div style="display: flex; gap: 10px; align-items: center; flex-wrap: wrap;" class="no-print">
+              
+              <!-- Tapisan Jabatan -->
+              <select id="eomsDeptFilter" class="form-control" style="width: auto; padding: 8px 12px;" onchange="updateEomsLecturerList()">
+                <option value="">-- Semua Jabatan --</option>
+                <optgroup label="Sektor Kecemerlangan Akademik">
+                  <option value="Sekretariat Jaminan Kualiti & Pematuhan Polisi">Sekretariat Jaminan Kualiti & Pematuhan Polisi (SJKPP)</option>
+                  <option value="Jabatan Kecemerlangan Akademik">Jabatan Kecemerlangan Akademik (JKA)</option>
+                  <option value="Jabatan Perancangan, Penyelidikan dan Inovasi">Jabatan Perancangan, Penyelidikan dan Inovasi (JPPI)</option>
+                  <option value="Jabatan Hal Ehwal Pelajar">Jabatan Hal Ehwal Pelajar (JHEP)</option>
+                  <option value="Jabatan Ilmu Pendidikan">Jabatan Ilmu Pendidikan (JIP)</option>
+                  <option value="Jabatan Bimbingan dan Kaunseling">Jabatan Bimbingan dan Kaunseling (JBK)</option>
+                  <option value="Jabatan Pendidikan Islam dan Moral">Jabatan Pendidikan Islam dan Moral (JPIM)</option>
+                  <option value="Jabatan Bahasa Arab">Jabatan Bahasa Arab (JBA)</option>
+                  <option value="Jabatan Pendidikan Khas">Jabatan Pendidikan Khas (JPK)</option>
+                  <option value="Jabatan Pengajian Melayu">Jabatan Pengajian Melayu (JPM)</option>
+                  <option value="Jabatan Sains Sosial">Jabatan Sains Sosial</option>
+                  <option value="Jabatan Matematik dan Sains">Jabatan Matematik dan Sains</option>
+                  <option value="Jabatan Pengajian Inggeris">Jabatan Pengajian Inggeris</option>
+                  <option value="Jabatan Seni Visual dan Muzik">Jabatan Seni Visual dan Muzik</option>
+                  <option value="Jabatan Pendidikan Jasmani dan Kesihatan">Jabatan Pendidikan Jasmani dan Kesihatan</option>
+                  <option value="Unit Kokurikulum">Unit Kokurikulum</option>
+                </optgroup>
+              </select>
+
+              <!-- Pilih Pensyarah -->
+              <select id="eomsLecturerSelect" class="form-control" style="width: auto; padding: 8px 12px;" onchange="renderEomsTable()">
+                  <option value="">-- Pilih Pensyarah --</option>
+              </select>
+
+              <!-- Tapisan Tahun -->
+              <select id="eomsYearFilter" class="form-control" style="width: auto; padding: 8px 12px;" onchange="renderEomsTable()">
+                <option value="">Semua Tahun</option>
+              </select>
+
+              <!-- Tapisan Semester -->
+              <select id="eomsSemFilter" class="form-control" style="width: auto; padding: 8px 12px;" onchange="renderEomsTable()">
+                <option value="">Semua Semester</option>
+                <option value="I">I</option><option value="II">II</option><option value="III">III</option>
+              </select>
+
+              <button class="btn btn-primary" onclick="window.print()">
+                <svg viewBox="0 0 24 24" style="width:16px;height:16px;fill:currentColor;margin-right:5px;"><path d="M19 8H5c-1.66 0-3 1.34-3 3v6h4v4h12v-4h4v-6c0-1.66-1.34-3-3-3zm-3 11H8v-5h8v5zm3-7c-.55 0-1-.45-1-1s.45-1 1-1 1 .45 1 1-.45 1-1 1zm-1-9H6v4h12V3z"/></svg>
+                Cetak Laporan
+              </button>
+            </div>
+          </div>
+          <div class="card-body table-responsive">
+            <!-- KAWASAN CETAK -->
+            <div id="printArea">
+              <div id="printHeader" class="hidden" style="text-align: center; margin-bottom: 20px;">
+                <h2 style="margin:0;">LAPORAN PEMANTAUAN EOMS (PT-03)</h2>
+                <p style="margin:5px 0;">Nama Pensyarah: <strong id="printName">-</strong></p>
+                <p style="margin:5px 0;">Jabatan: <span id="printDept">-</span></p>
+                <p style="margin:5px 0;">Tahun/Sem: <span id="printSession">-</span> | Tarikh Cetak: <span id="printDate">-</span></p>
+                <hr style="border:1px solid #000; margin-top:15px;">
+              </div>
+
+              <table id="eomsTable" style="width: 100%; border-collapse: collapse; border: 1px solid #ccc;">
+                  <tr><td style="text-align:center; padding: 20px; color: var(--text-muted);">Sila pilih pensyarah dari menu di atas untuk melihat semakan EOMS.</td></tr>
+              </table>
+            </div>
+          </div>
+        </div>
+
+      </div>
+    </div>
+  </main>
+</div>
+
+<!-- MODALS -->
+<div id="recordModal" class="modal-overlay hidden no-print">
+  <div class="modal-box">
+    <div class="modal-header"><h3 id="recordModalTitle">Tambah Rekod</h3><button class="close-btn" onclick="closeModal('recordModal')">×</button></div>
+    <form id="recordForm">
+      <div class="modal-body">
+        <input id="recordId" type="hidden">
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px;">
+          <div class="form-group"><label>Tahun</label><input id="fYear" type="number" class="form-control" required></div>
+          <div class="form-group"><label>Semester</label><select id="fSem" class="form-control"><option value="">- Tiada -</option><option>I</option><option>II</option><option>III</option></select></div>
+        </div>
+        <div class="form-group"><label>Kategori</label><select id="fCategory" class="form-control"></select></div>
+        <div class="form-group"><label>Tajuk Dokumen</label><input id="fTitle" type="text" class="form-control" required></div>
+        <div class="form-group"><label>Keterangan Ringkas</label><textarea id="fDescription" class="form-control" rows="2"></textarea></div>
+        <div class="form-group"><label>Pautan Bahan (Pilihan)</label><input id="fLink" type="url" class="form-control" placeholder="https://..."></div>
+        <div class="form-group" style="background: #f8fafc; padding: 15px; border-radius: 8px; border: 1px dashed var(--border);">
+          <label style="margin-bottom: 5px;">Muat Naik PDF (Maks 20MB)</label>
+          <input id="fFile" type="file" accept="application/pdf" style="font-size: 13px;">
+          <div id="fFileName" style="font-size: 12px; color: var(--success); margin-top: 5px;"></div>
+        </div>
+      </div>
+      <div class="modal-footer"><button type="button" class="btn btn-outline" onclick="closeModal('recordModal')">Batal</button><button type="submit" class="btn btn-primary" id="recordSubmitBtn">Simpan Rekod</button></div>
+    </form>
+  </div>
+</div>
+
+<div id="profileModal" class="modal-overlay hidden no-print">
+  <div class="modal-box">
+    <div class="modal-header"><h3>Kemaskini Profil</h3><button class="close-btn" onclick="closeModal('profileModal')">×</button></div>
+    <form id="profileForm">
+      <div class="modal-body">
+        <div class="form-group"><label>Nama Penuh</label><input id="pName" type="text" class="form-control" required></div>
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px;">
+          <div class="form-group"><label>No. Pekerja</label><input id="pStaff" type="text" class="form-control"></div>
+          <div class="form-group"><label>Gred</label><input id="pGrade" type="text" class="form-control"></div>
+        </div>
+        <div class="form-group">
+          <label>Jabatan / Unit</label>
+          <select id="pDept" class="form-control">
+            <optgroup label="Sektor Kecemerlangan Akademik">
+              <option value="Sekretariat Jaminan Kualiti & Pematuhan Polisi">Sekretariat Jaminan Kualiti & Pematuhan Polisi (SJKPP)</option>
+              <option value="Jabatan Kecemerlangan Akademik">Jabatan Kecemerlangan Akademik (JKA)</option>
+              <option value="Jabatan Perancangan, Penyelidikan dan Inovasi">Jabatan Perancangan, Penyelidikan dan Inovasi (JPPI)</option>
+              <option value="Jabatan Hal Ehwal Pelajar">Jabatan Hal Ehwal Pelajar (JHEP)</option>
+              <option value="Jabatan Ilmu Pendidikan">Jabatan Ilmu Pendidikan (JIP)</option>
+              <option value="Jabatan Bimbingan dan Kaunseling">Jabatan Bimbingan dan Kaunseling (JBK)</option>
+              <option value="Jabatan Pendidikan Islam dan Moral">Jabatan Pendidikan Islam dan Moral (JPIM)</option>
+              <option value="Jabatan Bahasa Arab">Jabatan Bahasa Arab (JBA)</option>
+              <option value="Jabatan Pendidikan Khas">Jabatan Pendidikan Khas (JPK)</option>
+              <option value="Jabatan Pengajian Melayu">Jabatan Pengajian Melayu (JPM)</option>
+              <option value="Jabatan Sains Sosial">Jabatan Sains Sosial</option>
+              <option value="Jabatan Matematik dan Sains">Jabatan Matematik dan Sains</option>
+              <option value="Jabatan Pengajian Inggeris">Jabatan Pengajian Inggeris</option>
+              <option value="Jabatan Seni Visual dan Muzik">Jabatan Seni Visual dan Muzik</option>
+              <option value="Jabatan Pendidikan Jasmani dan Kesihatan">Jabatan Pendidikan Jasmani dan Kesihatan</option>
+              <option value="Unit Kokurikulum">Unit Kokurikulum</option>
+            </optgroup>
+          </select>
+        </div>
+        <div class="form-group" style="background: #f8fafc; padding: 15px; border-radius: 8px; border: 1px dashed var(--border);">
+          <label style="margin-bottom: 5px;">Foto Profil (Maks 5MB)</label>
+          <input id="pFile" type="file" accept="image/*" style="font-size: 13px;">
+          <img id="pPreview" class="hidden" style="max-width: 80px; margin-top: 10px; border-radius: 8px;">
+        </div>
+      </div>
+      <div class="modal-footer"><button type="button" class="btn btn-outline" onclick="closeModal('profileModal')">Batal</button><button type="submit" class="btn btn-primary" id="profileSubmitBtn">Simpan Profil</button></div>
+    </form>
+  </div>
+</div>
+
+<div id="toast" class="toast hidden no-print" style="position:fixed; bottom:20px; right:20px; background:var(--text-main); color:#fff; padding:15px 25px; border-radius:8px; font-weight:bold; z-index:1000; box-shadow:0 10px 20px rgba(0,0,0,0.2);">Mesej</div>
+
+<!-- KAWALAN KESELAMATAN -->
+<script>
+  if (self == top) { document.documentElement.style.visibility = 'visible'; } else { top.location = self.location; }
+</script>
+<script>
+document.addEventListener('contextmenu', event => event.preventDefault());
+document.onkeydown = function(e) {
+  if (e.keyCode == 123) return false;
+  if (e.ctrlKey && e.shiftKey && (e.keyCode == 73 || e.keyCode == 74 || e.keyCode == 67)) return false;
+  if (e.ctrlKey && e.keyCode == 85) return false;
+  if (e.ctrlKey && e.keyCode == 83) return false;
+  if (e.ctrlKey && e.keyCode == 80) return false;
+  if (e.ctrlKey && e.keyCode == 65) return false;
+  if (e.ctrlKey && e.keyCode == 67) return false;
+};
+
+const API_URL = 'https://script.google.com/macros/s/AKfycbz09-ZqqFPKu22lXhMFVM7Ay6_o_g1HqM4OJwaxbBnsswrQBWjtbtYwqbCTWBrc324/exec';
+const DEFAULT_CATEGORIES = {
+  PROFIL: ['Curriculum Vitae','Senarai Tugas','Sijil Kelayakan Akademik / Ikhtisas','Surat Lantikan Perkhidmatan','Rekod / Sijil Kursus / Bengkel','Surat Panggilan Mesyuarat','LAIN LAIN'],
+  KURSUS: ['Senarai Semak KJ/KU PK1','Kalendar Akademik','Jadual Waktu (ATP)','Ringkasan Maklumat Kursus (RMK)','Induksi Kursus','Rancangan Pengajaran Semester (LAM-PT-03-01)','Rancangan Pengajaran Mingguan (LAM-PT-03-02)','Maklumat Pelajar','Rekod Kehadiran Pelajar','Rekod Pentaksiran Pelajar (JST/Rubrik/JSU)','Rekod Taklimat Pentaksiran','Borang LAM-PT-04-01','Bahan PdP','LAIN LAIN']
+};
+const AUDIT_CHECKLIST = {
+  PROFIL: ['Curriculum Vitae','Senarai Tugas','Sijil Kelayakan Akademik / Ikhtisas','Surat Lantikan Perkhidmatan','Rekod / Sijil Kursus / Bengkel','Surat Panggilan Mesyuarat'],
+  KURSUS: ['Senarai Semak KJ/KU PK1','Kalendar Akademik','Jadual Waktu (ATP)','Ringkasan Maklumat Kursus (RMK)','Induksi Kursus','Rancangan Pengajaran Semester (LAM-PT-03-01)','Rancangan Pengajaran Mingguan (LAM-PT-03-02)','Maklumat Pelajar','Rekod Kehadiran Pelajar','Rekod Pentaksiran Pelajar (JST/Rubrik/JSU)','Rekod Taklimat Pentaksiran','Borang LAM-PT-04-01','Bahan PdP']
+};
+// Senarai Semak Khas EOMS
+const EOMS_CHECKLIST = [
+  "1. Senarai Semak KJ/KU PK1",
+  "2. Kalendar Akademik",
+  "3. Jadual Waktu (ATP)",
+  "4. Ringkasan Maklumat Kursus (RMK)/Maklumat Kursus (MK) terkini.",
+  "5. Induksi Kursus Bagi Kursus yang diajar lebih daripada 1 org pensyarah (penyelaras kursus shj)",
+  "6. Borang Rancangan Pengajaran dan Pembelajaran Semester (LAM-PT-03-01) adalah mengikut format terkini",
+  "7. Jumlah jam bersemuka LAM-PT-03-01 adalah sama seperti jumlah jam bersemuka dalam RMK/ Maklumat Kursus.",
+  "8. Agihan jam bersemuka LAM-PT-03-01 mengikut topik adalah sama seperti agihan jam bersemuka dalam RMK/ Maklumat Kursus.",
+  "9. Pengiraan jam bersemuka untuk kuliah, tutorial dan amali setiap minggu dalam LAM-PT-03-01 mengambil kira minggu yang digunakan untuk praktikum/ PBS/ internship.",
+  "10. Tarikh dalam LAM-PT-03-01 menunjukkan kuliah/aktiviti bermula pada minggu pertama semester.",
+  "11. Borang Rancangan Pengajaran dan Pembelajaran Mingguan (LAM-PT-03-02) adalah mengikut format terkini.",
+  "12. Agihan jam untuk kuliah, tutorial dan amali setiap minggu dalam LAM-PT-03-02 adalah seperti dinyatakan dalam RMK/ Maklumat Kursus.",
+  "13. Refleksi dalam LAM-PT-03-02 menunjukkan pelaksanaan aktiviti memenuhi aras taksonomi pembelajaran dan kemahiran insaniah.",
+  "14. Maklumat Pelajar - Mempunyai maklumat asas",
+  "15. Rekod Kehadiran Pelajar LAM-PT-03-05 dan ITEMS",
+  "16. Rekod Pentaksiran Pelajar - JST, Soalan Pentaksiran, Rubrik. JSU bagi Kuiz/Ujian (jika ada dalam MK).",
+  "17. Rekod Taklimat Pentaksiran pelajar :Surat Panggilan dan Daftar Kehadiran Taklimat. Rujuk silang - tarikh mesti sebelum pentaksiran diedarkan.",
+  "18. Borang LAM-PT-04-01 – agihan markah selari dengan HPK",
+  "19. Bahan PdP kuliah/tutorial/amali (bentuk hardcopy/softcopy)",
+  "20. Surat Lantikan Pensyarah Penyelia Praktikum",
+  "21. Perancangan Praktikum",
+  "22. Jadual waktu pelajar yang diselia",
+  "23. Rekod-rekod Bimbingan"
+];
+
+let token='', user=null, section='PROFIL', records=[], checklistStatus={}, categories=DEFAULT_CATEGORIES;
+let adminRecords=[], lecturersList=[], eomsStatusData={};
+let currentDetailLecturerEmail = '';
+const $ = id => document.getElementById(id);
+const esc = s => String(s??'').replace(/[&<>'"]/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]));
+
+async function api(action, data={}) {
+  try {
+    const r = await fetch(API_URL, { method:'POST', body:JSON.stringify({action, token, ...data}) });
+    const j = await r.json();
+    if(!j.ok) {
+      if(j.error === 'SESSION_INVALID') { logout(); return; }
+      throw Error(j.error || 'Ralat');
+    }
+    return j;
+  } catch(e) { throw e; }
+}
+
+/* AUTH UI LOGIC */
+function toggleAuth(mode) {
+  $('loginForm').classList.add('hidden');
+  $('registerForm').classList.add('hidden');
+  $('forgotForm').classList.add('hidden');
+  $('resetForm').classList.add('hidden');
+  $('authMsg').classList.add('hidden');
+  $('authToggleArea').classList.remove('hidden');
+  
+  if (mode === 'login') {
+    $('loginForm').classList.remove('hidden');
+    $('authTitle').textContent = 'E-Folio IPG';
+    $('authSubtitle').textContent = 'Sistem Pengurusan Folio Pensyarah';
+    $('toggleText').textContent = 'Belum ada akaun?';
+    $('toggleLink').textContent = 'Daftar di sini';
+    $('toggleLink').onclick = function() { toggleAuth('register'); return false; };
+  } else if (mode === 'register') {
+    $('registerForm').classList.remove('hidden');
+    $('authTitle').textContent = 'Daftar Akaun';
+    $('authSubtitle').textContent = 'Sila lengkapkan maklumat anda';
+    $('toggleText').textContent = 'Sudah ada akaun?';
+    $('toggleLink').textContent = 'Log masuk sini';
+    $('toggleLink').onclick = function() { toggleAuth('login'); return false; };
+  } else if (mode === 'forgot') {
+    $('forgotForm').classList.remove('hidden');
+    $('authTitle').textContent = 'Lupa Kata Laluan';
+    $('authSubtitle').textContent = 'Set semula akses akaun anda';
+    $('toggleText').textContent = 'Kembali ke';
+    $('toggleLink').textContent = 'Log Masuk';
+    $('toggleLink').onclick = function() { toggleAuth('login'); return false; };
+  } else if (mode === 'reset') {
+    $('resetForm').classList.remove('hidden');
+    $('authTitle').textContent = 'Kata Laluan Baharu';
+    $('authSubtitle').textContent = 'Sila tetapkan kata laluan anda';
+    $('authToggleArea').classList.add('hidden');
+  }
+}
+
+function showAuthMsg(t, bad = true) {
+  $('authMsg').textContent = t;
+  $('authMsg').className = 'form-group';
+  $('authMsg').style.color = bad ? 'var(--danger)' : 'var(--success)';
+  $('authMsg').style.background = bad ? '#fef2f2' : '#ecfdf5';
+  $('authMsg').style.padding = '10px';
+  $('authMsg').style.borderRadius = '8px';
+  $('authMsg').style.border = '1px solid ' + (bad ? '#fecdd3' : '#a7f3d0');
+}
+
+/* FORM SUBMISSIONS */
+$('loginForm').onsubmit = async e => {
+  e.preventDefault();
+  const btn = $('loginBtn'); const orig = btn.textContent;
+  try {
+    btn.disabled = true; btn.textContent = 'Memproses...';
+    const j = await api('login', { email: $('loginEmail').value, password: $('loginPassword').value });
+    startApp(j);
+  } catch(x) { showAuthMsg(x.message); } finally { btn.disabled = false; btn.textContent = orig; }
+};
+
+$('regPhoto').onchange = e => {
+  const f = e.target.files[0];
+  if(f) { $('regPreview').src = URL.createObjectURL(f); $('regPreview').classList.remove('hidden'); }
+};
+
+$('registerForm').onsubmit = async e => {
+  e.preventDefault();
+  const btn = $('regBtn'); const orig = btn.textContent;
+  try {
+    btn.disabled = true; btn.textContent = 'Mendaftar...';
+    let photo = null;
+    if ($('regPhoto').files[0]) photo = await toBase64($('regPhoto').files[0]);
+    
+    const j = await api('register', {
+      namaPenuh: $('regName').value, email: $('regEmail').value, password: $('regPassword').value,
+      noPekerja: $('regStaff').value, gred: $('regGrade').value, jabatan: $('regDept').value,
+      photoDataUrl: photo, photoFileName: $('regPhoto').files[0]?.name
+    });
+    startApp(j);
+  } catch(x) { showAuthMsg(x.message); } finally { btn.disabled = false; btn.textContent = orig; }
+};
+
+$('forgotForm').onsubmit = async e => {
+  e.preventDefault();
+  const btn = $('forgotBtn'); const orig = btn.textContent;
+  try {
+    btn.disabled = true; btn.textContent = 'Menghantar...';
+    const j = await api('forgotPassword', { email: $('forgotEmail').value });
+    showAuthMsg(j.message, false);
+    $('forgotForm').reset();
+  } catch(x) { showAuthMsg(x.message); } finally { btn.disabled = false; btn.textContent = orig; }
+};
+
+$('resetForm').onsubmit = async e => {
+  e.preventDefault();
+  const p1 = $('resetPassword').value;
+  const p2 = $('resetPassword2').value;
+  if (p1 !== p2) return showAuthMsg('Kata laluan tidak sepadan.');
+  const btn = $('resetBtn'); const orig = btn.textContent;
+  try {
+    btn.disabled = true; btn.textContent = 'Menyimpan...';
+    const j = await api('resetPassword', { token: $('resetToken').value, password: p1 });
+    showAuthMsg(j.message, false);
+    setTimeout(() => { toggleAuth('login'); $('resetForm').reset(); }, 2000);
+  } catch(x) { showAuthMsg(x.message); } finally { btn.disabled = false; btn.textContent = orig; }
+};
+
+async function logout() {
+  try { await api('logout'); } catch(e){}
+  sessionStorage.removeItem('efolio_session');
+  location.reload();
+}
+
+/* STARTUP */
+async function startApp(j) {
+  token = j.token; user = j.user;
+  sessionStorage.setItem('efolio_session', JSON.stringify({token, user}));
+  $('authView').classList.add('hidden');
+  $('appView').classList.remove('hidden');
+  
+  if(user.Role === 'Admin') {
+    // Sembunyikan menu Pensyarah
+    $('menuBtnProfil').classList.add('hidden');
+    $('menuBtnKursus').classList.add('hidden');
+    $('menuBtnSemak').classList.add('hidden');
+    $('menuBtnStatistik').classList.add('hidden');
+    $('mainStatsGrid').classList.add('hidden'); // Sembunyikan statistik atas
+    $('btnEditProfile').classList.add('hidden');
+    // Tunjuk menu Admin
+    $('menuAdmin').classList.remove('hidden');
+    $('menuEoms').classList.remove('hidden');
+    $('menuAdmin').classList.add('active'); // Default active
+    section = 'ADMIN';
+  } else {
+    // Default untuk pensyarah
+    section = 'PROFIL';
+  }
+
+  paintProfile();
+  await loadData();
+  setSection(section);
+}
+
+function paintProfile() {
+  $('userNameTop').textContent = user.NamaPenuh || user.Email;
+  $('profileName').textContent = user.NamaPenuh || user.Email;
+  $('profileRole').textContent = user.Role === 'Admin' ? 'Pentadbir Sistem' : 'Pensyarah';
+  $('profileEmail').textContent = user.Email;
+  $('profileStaff').textContent = (user.NoPekerja || '-') + ' / ' + (user.Gred || '-');
+  $('profileDept').textContent = user.Jabatan || '-';
+  $('profileAvatar').src = user.FotoUrl || 'https://ui-avatars.com/api/?name='+encodeURIComponent(user.NamaPenuh||'P')+'&background=1e40af&color=fff&size=150';
+}
+
+async function loadData() {
+  try {
+    const j = await api('bootstrap');
+    categories = j.categories || DEFAULT_CATEGORIES;
+    $('statRecords').textContent = j.stats.records;
+    $('statImages').textContent = j.stats.images;
+    $('statLecturers').textContent = j.stats.lecturers;
+    
+    const r = await api('listRecords');
+    records = r.records || [];
+    checklistStatus = r.checklist || {};
+    
+    if(user.Role === 'Admin') await loadAdminData();
+  } catch(e) { showToast(e.message, true); }
+}
+
+async function loadAdminData() {
+  try {
+    const [resL, resR] = await Promise.all([ api('listLecturers'), api('listAllRecords') ]);
+    lecturersList = resL.lecturers || [];
+    adminRecords = resR.records || [];
+    
+    // 1. Kumpul semua tahun unik dari keseluruhan rekod dan isi dropdown TERLEBIH DAHULU
+    const years = [...new Set(adminRecords.map(r => r.Tahun).filter(Boolean))].sort().reverse();
+    const yearOptions = '<option value="">Semua Tahun</option>' + years.map(y => `<option value="${y}">${y}</option>`).join('');
+    
+    $('adminYearFilter').innerHTML = yearOptions;
+    $('adminDetailYearFilter').innerHTML = yearOptions;
+    $('eomsYearFilter').innerHTML = yearOptions;
+
+    // 2. Baru panggil fungsi lain yang mungkin menggunakan data tersebut
+    updateAdminLecturerList();
+    updateEomsLecturerList();
+    
+    // 3. Render paparan awal
+    renderAdminTable();
+    renderAdminDetailTable();
+    renderEomsTable();
+
+  } catch(e) { console.error(e); }
+}
+
+function updateAdminLecturerList() {
+  // Fungsi ini tidak lagi menggunakan adminLecturerSelect kerana elemen tersebut telah dibuang dalam HTML.
+  // Ia hanya memanggil renderAdminTable untuk memaparkan senarai penuh.
+  renderAdminTable();
+}
+
+function updateEomsLecturerList() {
+  const selectedDept = $('eomsDeptFilter').value;
+  let filteredLecturers = lecturersList.filter(l => l.Role !== 'Admin');
+  if(selectedDept) filteredLecturers = filteredLecturers.filter(l => l.Jabatan === selectedDept);
+
+  $('eomsLecturerSelect').innerHTML = '<option value="">-- Pilih Pensyarah --</option>' + 
+    filteredLecturers.map(l => `<option value="${esc(l.Email)}">${esc(l.NamaPenuh)}</option>`).join('');
+  renderEomsTable();
+}
+
+/* NAVIGASI */
+function setSection(s) {
+  section = s;
+  document.querySelectorAll('.menu-item').forEach(b => b.classList.toggle('active', b.dataset.section === s));
+  document.querySelectorAll('.card').forEach(c => c.classList.add('hidden'));
+  
+  // Kawalan akses visual
+  if (user.Role === 'Admin') {
+      $('mainProfilePanel').classList.add('hidden'); // Admin tak nampak profil sendiri di dashboard utama
+  } else {
+      $('mainProfilePanel').classList.remove('hidden');
+      $('mainStatsGrid').classList.remove('hidden');
+  }
+  
+  if(s === 'PROFIL' || s === 'KURSUS') {
+    $('viewTable').classList.remove('hidden');
+    $('pageTitle').textContent = s === 'PROFIL' ? 'Folio Pensyarah' : 'Folio Kursus';
+    $('tableSectionTitle').innerHTML = `<svg viewBox="0 0 24 24"><path d="M3 13h2v-2H3v2zm0 4h2v-2H3v2zm0-8h2V7H3v2zm4 4h14v-2H7v2zm0 4h14v-2H7v2zM7 7v2h14V7H7z"/></svg> Rekod ${s === 'PROFIL' ? 'Pensyarah' : 'Kursus'}`;
+    fillYears(); render();
+  } else if(s === 'SEMAK') {
+    $('viewSemak').classList.remove('hidden');
+    $('pageTitle').textContent = 'Senarai Semak Audit';
+    renderAudit();
+  } else if(s === 'STATISTIK') {
+    $('viewStatistik').classList.remove('hidden');
+    $('pageTitle').textContent = 'Statistik Bahan';
+    renderStatistik();
+  } else if(s === 'ADMIN') {
+    $('viewAdmin').classList.remove('hidden');
+    $('pageTitle').textContent = 'Panel Pemantau';
+    renderAdminTable();
+  } else if(s === 'ADMIN_DETAIL') {
+    $('viewAdminDetail').classList.remove('hidden');
+    $('pageTitle').textContent = 'Butiran Folio Pensyarah';
+    renderAdminDetailTable();
+  } else if(s === 'EOMS') {
+    $('viewEoms').classList.remove('hidden');
+    $('pageTitle').textContent = 'Senarai Semak EOMS';
+    renderEomsTable();
+  }
+}
+
+/* RENDER JADUAL */
+function fillYears() {
+  const ys = [...new Set(records.filter(r => r.Section === section).map(r => r.Tahun).filter(Boolean))].sort().reverse();
+  $('yearFilter').innerHTML = '<option value="">Semua Tahun</option>' + ys.map(y => `<option value="${y}">${y}</option>`).join('');
+}
+
+function render() {
+  const year = $('yearFilter').value;
+  const sem = $('semFilter').value;
+  const list = records.filter(r => r.Section === section && (!year || String(r.Tahun) === year) && (!sem || String(r.Semester) === sem));
+  
+  $('emptyTable').classList.toggle('hidden', list.length > 0);
+  $('recordsBody').innerHTML = list.map(r => `
+    <tr>
+      <td><div class="title-main">${esc(r.Tahun)}</div><div class="sub-text">Sem ${esc(r.Semester||'-')}</div></td>
+      <td><span class="badge badge-primary">${esc(r.Kategori)}</span></td>
+      <td><div class="title-main">${esc(r.Tajuk)}</div><div class="sub-text">${esc(r.Keterangan||'')}</div></td>
+      <td>${r.FileUrl ? `<a href="${esc(r.FileUrl)}" target="_blank" style="color:var(--primary); font-weight:bold; text-decoration:none;">Buka Fail</a>` : '<span class="sub-text">Tiada</span>'}</td>
+      <td class="no-print" style="text-align: right;">
+        <button class="btn btn-outline btn-sm" onclick='openRecord(${JSON.stringify(r).replace(/'/g, "&#39;")})'>Edit</button>
+        <button class="btn btn-danger btn-sm" onclick="deleteRecord('${esc(r.RecordId)}')">Padam</button>
+      </td>
+    </tr>
+  `).join('');
+}
+
+/* RENDER PANEL ADMIN (SENARAI PENSYARAH & BELUM MUAT NAIK) */
+function renderAdminTable() {
+  const dept = $('adminDeptFilter').value;
+  const year = $('adminYearFilter').value;
+  const sem = $('adminSemFilter').value;
+
+  let filteredLecturers = lecturersList.filter(l => l.Role !== 'Admin');
+  if(dept) filteredLecturers = filteredLecturers.filter(l => l.Jabatan === dept);
+
+  // Tapis rekod mengikut tahun dan semester yang dipilih (untuk kiraan)
+  const filteredRecords = adminRecords.filter(r => {
+    if(year && String(r.Tahun) !== String(year)) return false;
+    if(sem && String(r.Semester) !== String(sem)) return false;
+    return true;
+  });
+
+  $('adminEmpty').classList.toggle('hidden', filteredLecturers.length > 0);
+
+  $('adminRecordsBody').innerHTML = filteredLecturers.map(l => {
+    // Kira jumlah bahan milik pensyarah ini mengikut tapisan
+    const lecRecords = filteredRecords.filter(r => r.OwnerEmail === l.Email);
+    const totalBahan = lecRecords.length;
+    const totalKategoriWajib = DEFAULT_CATEGORIES.PROFIL.length + DEFAULT_CATEGORIES.KURSUS.length;
+    const totalBelum = totalKategoriWajib - totalBahan;
+    
+    // Sediakan senarai kecil untuk paparan
+    let badgeBelum = '';
+    if (totalBelum > 0) {
+        // Dapatkan nama-nama kategori yang belum diisi
+        const filledCats = lecRecords.map(r => r.Kategori);
+        const missingCats = [...DEFAULT_CATEGORIES.PROFIL, ...DEFAULT_CATEGORIES.KURSUS].filter(c => !filledCats.includes(c));
+        
+        // Papar 2-3 contoh sahaja supaya tidak terlalu panjang
+        const displayMissing = missingCats.slice(0, 3).map(c => `<div class="sub-text" style="color:var(--danger);">- ${esc(c)}</div>`).join('');
+        const moreText = missingCats.length > 3 ? `<div class="sub-text" style="color:var(--danger); font-style:italic;">...dan ${missingCats.length - 3} lagi</div>` : '';
+        badgeBelum = displayMissing + moreText;
+    } else {
+        badgeBelum = `<div class="sub-text" style="color:var(--success);">Lengkap</div>`;
+    }
+
+    return `
+      <tr>
+        <td>
+          <div class="title-main" style="cursor:pointer; color:var(--primary); text-decoration:underline;" onclick="openAdminDetail('${esc(l.Email)}')">${esc(l.NamaPenuh)}</div>
+        </td>
+        <td>${esc(l.Jabatan)}</td>
+        <td style="text-align:center;"><strong>${totalBahan}</strong></td>
+        <td>
+          <strong style="color:${totalBelum>0?'var(--danger)':'var(--success)'}; font-size:14px;">${totalBelum > 0 ? totalBelum + ' Kategori' : '0'}</strong>
+          ${badgeBelum}
+        </td>
+        <td style="text-align:right;">
+           <button class="btn btn-primary btn-sm" onclick="openAdminDetail('${esc(l.Email)}')">Lihat Folio</button>
+        </td>
+      </tr>
+    `;
+  }).join('');
+}
+
+/* HALAMAN BUTIRAN ADMIN */
+function openAdminDetail(email) {
+  const lect = lecturersList.find(l => l.Email === email);
+  if(!lect) return;
+  currentDetailLecturerEmail = email;
+  
+  $('adminDetailName').textContent = lect.NamaPenuh;
+  $('adminDetailMeta').textContent = lect.Jabatan + ' · ' + lect.Email;
+  $('adminDetailAvatar').src = lect.FotoUrl || 'https://ui-avatars.com/api/?name='+encodeURIComponent(lect.NamaPenuh||'P')+'&background=1e40af&color=fff';
+  
+  // Reset dropdowns
+  $('adminDetailYearFilter').value = '';
+  $('adminDetailSemFilter').value = '';
+  
+  setSection('ADMIN_DETAIL');
+}
+
+function renderAdminDetailTable() {
+  const year = $('adminDetailYearFilter').value;
+  const sem = $('adminDetailSemFilter').value;
+  
+  const list = adminRecords.filter(r => {
+    if(r.OwnerEmail !== currentDetailLecturerEmail) return false;
+    if(year && String(r.Tahun) !== String(year)) return false;
+    if(sem && String(r.Semester) !== String(sem)) return false;
+    return true;
+  });
+
+  $('adminDetailEmpty').classList.toggle('hidden', list.length > 0);
+
+  $('adminDetailBody').innerHTML = list.map(r => `
+    <tr>
+      <td><div class="title-main">${esc(r.Tahun)}</div><div class="sub-text">Sem ${esc(r.Semester||'-')}</div></td>
+      <td><span class="badge badge-primary">${r.Section === 'PROFIL' ? 'Pensyarah' : 'Kursus'}</span></td>
+      <td><span class="badge badge-primary" style="background:#f8fafc; border:1px solid var(--border); color:var(--text-main);">${esc(r.Kategori)}</span></td>
+      <td><div class="title-main">${esc(r.Tajuk)}</div><div class="sub-text">${esc(r.Keterangan||'')}</div></td>
+      <td>${r.FileUrl ? `<a href="${esc(r.FileUrl)}" target="_blank" style="color:var(--primary); font-weight:bold;">Buka Fail</a>` : '-'}</td>
+    </tr>
+  `).join('');
+}
+
+/* RENDER SENARAI SEMAK EOMS (ADMIN) */
+async function renderEomsTable() {
+  const lecEmail = $('eomsLecturerSelect').value;
+  const year = $('eomsYearFilter').value;
+  const sem = $('eomsSemFilter').value;
+  const table = $('eomsTable');
+  
+  // Reset header print
+  $('printHeader').classList.add('hidden');
+
+  if (!lecEmail) {
+    table.innerHTML = `<tr><td style="text-align:center; padding: 20px; color: var(--text-muted);">Sila pilih pensyarah dari menu di atas untuk melihat semakan EOMS.</td></tr>`;
+    return;
+  }
+
+  // Dapatkan status EOMS dari backend
+  try {
+    const res = await api('getEomsStatus', { targetEmail: lecEmail });
+    eomsStatusData = res.eoms || {};
+  } catch(e) { eomsStatusData = {}; }
+
+  const lect = lecturersList.find(l => l.Email === lecEmail);
+  
+  // Sediakan data header untuk cetak
+  $('printName').textContent = lect ? lect.NamaPenuh : lecEmail;
+  $('printDept').textContent = lect ? lect.Jabatan : '-';
+  $('printSession').textContent = (year ? year : 'Semua Tahun') + ' / ' + (sem ? 'Semester ' + sem : 'Semua Semester');
+  const today = new Date();
+  $('printDate').textContent = today.toLocaleDateString('ms-MY', { day: '2-digit', month: 'long', year: 'numeric' });
+  
+  let html = `<tr class="no-print" style="background:var(--primary-light);"><th>Item Penilaian EOMS</th><th style="text-align:center;">Status</th><th style="text-align:center;">Tindakan</th></tr>`;
+  html += `<tr class="hidden" style="background:#eee;"><th style="border:1px solid #ccc;padding:10px;text-align:left;">Item Penilaian</th><th style="border:1px solid #ccc;padding:10px;text-align:center;width:100px;">Status</th><th class="no-print" style="width:240px;"></th></tr>`;
+  
+  EOMS_CHECKLIST.forEach((item, index) => {
+    const status = eomsStatusData[item] || '';
+    let st = '<span class="badge" style="background:#e2e8f0;color:#475569;">Belum Semak</span>';
+    if(status === 'ADA') st = '<span class="badge badge-success">Ada</span>';
+    if(status === 'TIADA') st = '<span class="badge badge-danger">Tiada</span>';
+    if(status === 'TIDAK TERLIBAT') st = '<span class="badge badge-warning">Tidak Terlibat</span>';
+
+    // Optimistic UI: kita simpan status dalam atribut untuk toggle
+    html += `
+      <tr id="eoms-row-${index}">
+        <td style="font-size:12px; border-bottom:1px solid #eee; padding:10px;">${esc(item)}</td>
+        <td style="text-align:center; border-bottom:1px solid #eee;" id="eoms-status-${index}">${st}</td>
+        <td class="no-print" style="text-align:center; border-bottom:1px solid #eee; white-space:nowrap;">
+          <button class="btn btn-sm ${status==='ADA'?'btn-success':'btn-outline'}" onclick="toggleEoms('${esc(item)}', 'ADA', ${index})">Ada</button>
+          <button class="btn btn-sm ${status==='TIADA'?'btn-danger':'btn-outline'}" onclick="toggleEoms('${esc(item)}', 'TIADA', ${index})">Tiada</button>
+          <button class="btn btn-sm ${status==='TIDAK TERLIBAT'?'btn-warning':'btn-outline'}" onclick="toggleEoms('${esc(item)}', 'TIDAK TERLIBAT', ${index})">Tidak Terlibat</button>
+        </td>
+      </tr>
+    `;
+  });
+  
+  table.innerHTML = html;
+}
+
+async function toggleEoms(item, newStatus, index) {
+  const lecEmail = $('eomsLecturerSelect').value;
+  if(!lecEmail) return;
+  
+  // 1. Simpan status lama untuk rollback jika gagal
+  const oldStatus = eomsStatusData[item] || '';
+  
+  // 2. Kemas kini UI serta-merta (Optimistic UI)
+  eomsStatusData[item] = newStatus;
+  
+  let stHtml = '<span class="badge" style="background:#e2e8f0;color:#475569;">Belum Semak</span>';
+  if(newStatus === 'ADA') stHtml = '<span class="badge badge-success">Ada</span>';
+  if(newStatus === 'TIADA') stHtml = '<span class="badge badge-danger">Tiada</span>';
+  if(newStatus === 'TIDAK TERLIBAT') stHtml = '<span class="badge badge-warning">Tidak Terlibat</span>';
+  
+  // Kemas kini sel status
+  $(`eoms-status-${index}`).innerHTML = stHtml;
+  
+  // Kemas kini butang (tukar warna)
+  const row = $(`eoms-row-${index}`);
+  const btns = row.querySelectorAll('button');
+  btns[0].className = `btn btn-sm ${newStatus==='ADA'?'btn-success':'btn-outline'}`;
+  btns[1].className = `btn btn-sm ${newStatus==='TIADA'?'btn-danger':'btn-outline'}`;
+  btns[2].className = `btn btn-sm ${newStatus==='TIDAK TERLIBAT'?'btn-warning':'btn-outline'}`;
+
+  // 3. Hantar ke backend di latar belakang
+  try {
+    await api('toggleEoms', { targetEmail: lecEmail, itemName: item, status: newStatus });
+  } catch(e) { 
+    // Jika gagal, rollback UI
+    showToast('Gagal menyimpan. Sila cuba lagi.', true); 
+    eomsStatusData[item] = oldStatus;
+    
+    let revertHtml = '<span class="badge" style="background:#e2e8f0;color:#475569;">Belum Semak</span>';
+    if(oldStatus === 'ADA') revertHtml = '<span class="badge badge-success">Ada</span>';
+    if(oldStatus === 'TIADA') revertHtml = '<span class="badge badge-danger">Tiada</span>';
+    if(oldStatus === 'TIDAK TERLIBAT') revertHtml = '<span class="badge badge-warning">Tidak Terlibat</span>';
+    
+    $(`eoms-status-${index}`).innerHTML = revertHtml;
+    btns[0].className = `btn btn-sm ${oldStatus==='ADA'?'btn-success':'btn-outline'}`;
+    btns[1].className = `btn btn-sm ${oldStatus==='TIADA'?'btn-danger':'btn-outline'}`;
+    btns[2].className = `btn btn-sm ${oldStatus==='TIDAK TERLIBAT'?'btn-warning':'btn-outline'}`;
+  }
+}
+
+/* RENDER CHECKLIST & STATISTIK (PENSYARAH) */
+function renderAudit() {
+  let html = '';
+  ['PROFIL', 'KURSUS'].forEach(sec => {
+    html += `<tr><th colspan="4" style="background:var(--primary-light); color:var(--primary); font-size:14px;">FOLIO ${sec}</th></tr>`;
+    html += `<tr><th>Item Penilaian</th><th>Status</th><th>Bil. Fail</th><th>Tindakan</th></tr>`;
+    AUDIT_CHECKLIST[sec].forEach(item => {
+      const count = records.filter(r => r.Section === sec && r.Kategori === item).length;
+      const isNA = checklistStatus[item] === 'TIADA';
+      let st = '', act = '';
+      if(isNA) { st = '<span class="badge" style="background:#e2e8f0;color:#475569;">Tidak Terlibat</span>'; act = `<button class="btn btn-outline btn-sm" onclick="toggleNA('${esc(item)}','ADA')">Batal</button>`; }
+      else if(count > 0) { st = '<span class="badge badge-success">Selesai</span>'; act = `<span class="sub-text">Muat naik selesai</span>`; }
+      else { st = '<span class="badge badge-danger">Belum</span>'; act = `<button class="btn btn-outline btn-sm" onclick="toggleNA('${esc(item)}','TIADA')">Tanda N/A</button>`; }
+      html += `<tr><td><div class="title-main">${esc(item)}</div></td><td>${st}</td><td><strong style="font-size:16px;color:var(--primary);">${count}</strong></td><td>${act}</td></tr>`;
+    });
+  });
+  $('auditTable').innerHTML = html;
+}
+
+async function toggleNA(item, status) {
+  try {
+    await api('toggleChecklist', { itemName: item, status });
+    checklistStatus[item] = status;
+    renderAudit();
+  } catch(e) { showToast(e.message, true); }
+}
+
+function renderStatistik() {
+  let html = '';
+  ['PROFIL', 'KURSUS'].forEach(sec => {
+    html += `<div style="grid-column:1/-1; margin-top:10px;"><h4 style="margin:0; color:var(--primary);">FOLIO ${sec}</h4></div>`;
+    DEFAULT_CATEGORIES[sec].forEach(item => {
+      const count = records.filter(r => r.Section === sec && r.Kategori === item).length;
+      html += `
+        <div class="list-item ${count > 0 ? 'uploaded' : 'missing'}">
+          <div style="flex:1;">
+            <div class="title-main" style="font-size:13px;">${esc(item)}</div>
+            <div class="sub-text">${count} Bahan dimuat naik</div>
+          </div>
+          <div style="font-size:24px; font-weight:800; color:${count>0?'var(--success)':'var(--danger)'};">${count}</div>
+        </div>
+      `;
+    });
+  });
+  $('statsContainer').innerHTML = html;
+}
+
+/* CRUD REKOD */
+function openRecord(r=null) {
+  $('recordModalTitle').textContent = r ? 'Kemaskini Rekod' : 'Tambah Rekod';
+  $('recordId').value = r?.RecordId || '';
+  $('fYear').value = r?.Tahun || new Date().getFullYear();
+  $('fSem').value = r?.Semester || '';
+  $('fTitle').value = r?.Tajuk || '';
+  $('fDescription').value = r?.Keterangan || '';
+  $('fLink').value = (r?.FileUrl && r?.FileMimeType !== 'application/pdf') ? r.FileUrl : '';
+  const choices = categories[section] || DEFAULT_CATEGORIES[section];
+  $('fCategory').innerHTML = choices.map(c => `<option>${esc(c)}</option>`).join('');
+  $('fCategory').value = r?.Kategori || choices[0];
+  $('fFile').value = ''; $('fFileName').textContent = r?.FileName || '';
+  $('recordModal').classList.remove('hidden');
+}
+
+$('fFile').onchange = e => { $('fFileName').textContent = e.target.files[0]?.name || ''; };
+
+$('recordForm').onsubmit = async e => {
+  e.preventDefault();
+  const btn = $('recordSubmitBtn'); const orig = btn.textContent;
+  try {
+    btn.disabled = true; btn.textContent = 'Menyimpan...';
+    let file = null; const f = $('fFile').files[0];
+    if(f) {
+      if(f.type !== 'application/pdf') throw Error('Sila pilih fail PDF sahaja.');
+      const b64 = await toBase64(f);
+      const u = await api('uploadMaterial', { dataUrl: b64, fileName: f.name });
+      file = { fileId: u.fileId, fileUrl: u.fileUrl, fileName: u.fileName, fileMimeType: 'application/pdf' };
+    } else if($('fLink').value.trim()) {
+      file = { fileUrl: $('fLink').value.trim(), fileName: 'Pautan', fileMimeType: 'text/link' };
+    }
+    await api('saveRecord', {
+      recordId: $('recordId').value, section, tahun: $('fYear').value, semester: $('fSem').value,
+      kategori: $('fCategory').value, tajuk: $('fTitle').value, keterangan: $('fDescription').value, ...(file || {})
+    });
+    closeModal('recordModal'); await loadData(); setSection(section);
+    showToast('Rekod disimpan.');
+  } catch(x) { showToast(x.message, true); } finally { btn.disabled = false; btn.textContent = orig; }
+};
+
+async function deleteRecord(id) {
+  if(!confirm('Padam rekod ini?')) return;
+  try {
+    await api('deleteRecord', { recordId: id });
+    await loadData(); setSection(section);
+    showToast('Rekod dipadam.');
+  } catch(e) { showToast(e.message, true); }
+}
+
+/* PROFIL */
+function openProfile() {
+  $('pName').value = user.NamaPenuh || ''; $('pStaff').value = user.NoPekerja || ''; $('pGrade').value = user.Gred || ''; $('pDept').value = user.Jabatan || '';
+  $('pFile').value = ''; $('pPreview').classList.add('hidden');
+  $('profileModal').classList.remove('hidden');
+}
+
+$('pFile').onchange = e => {
+  const f = e.target.files[0];
+  if(f) { $('pPreview').src = URL.createObjectURL(f); $('pPreview').classList.remove('hidden'); }
+};
+
+$('profileForm').onsubmit = async e => {
+  e.preventDefault();
+  const btn = $('profileSubmitBtn'); const orig = btn.textContent;
+  try {
+    btn.disabled = true; btn.textContent = 'Menyimpan...';
+    let photo = user.FotoUrl; const f = $('pFile').files[0];
+    if(f) { const b64 = await toBase64(f); const u = await api('uploadImage', { dataUrl: b64, fileName: f.name }); photo = u.fileUrl; }
+    const j = await api('updateProfile', { namaPenuh:$('pName').value, noPekerja:$('pStaff').value, gred:$('pGrade').value, jabatan:$('pDept').value, fotoUrl: photo });
+    user = j.user; sessionStorage.setItem('efolio_session', JSON.stringify({token, user}));
+    paintProfile(); closeModal('profileModal'); showToast('Profil dikemaskini.');
+  } catch(x) { showToast(x.message, true); } finally { btn.disabled = false; btn.textContent = orig; }
+};
+
+/* UTIL */
+function closeModal(id) { $(id).classList.add('hidden'); }
+function showToast(msg, bad=false) {
+  const t = $('toast'); t.textContent = msg;
+  t.style.background = bad ? 'var(--danger)' : 'var(--success)';
+  t.classList.remove('hidden');
+  setTimeout(() => t.classList.add('hidden'), 3000);
+}
+function toBase64(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader(); reader.readAsDataURL(file);
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = error => reject(error);
+  });
+}
+
+(function(){
+  const urlParams = new URLSearchParams(window.location.search);
+  const resetToken = urlParams.get('reset');
+  if (resetToken) {
+    $('resetToken').value = resetToken;
+    toggleAuth('reset');
+    window.history.replaceState({}, document.title, window.location.pathname);
+    return;
+  }
+  const s = sessionStorage.getItem('efolio_session');
+  if(s) { try { startApp(JSON.parse(s)); } catch(e) { sessionStorage.clear(); } }
+})();
+</script>
+</body>
+</html>
+```
+
+---
+
+### 📄 3. MANUAL PEMASANGAN (Simpan sebagai `MANUAL_PEMASANGAN.md` atau PDF)
+
+**Panduan Pemasangan E-Folio Melalui Google Apps Script**
+
+Sistem ini menggunakan Google Sheets sebagai pangkalan data dan Google Drive sebagai storan fail. Setiap jabatan boleh menyalin (Copy) sistem ini secara berasingan.
+
+**Langkah 1: Sediakan Pangkalan Data (Google Sheet)**
+1. Buka [Google Sheets](https://sheets.google.com).
+2. Klik **+ Blank** (helaian kosong) untuk mencipta dokumen baharu.
+3. Namakan fail tersebut mengikut jabatan (contoh: `DB E-FOLIO UNIT KOKURIKULUM`).
+4. **PENTING:** Anda **tidak perlu** mencipta tab atau memasukkan tajuk lajur secara manual. Sistem akan menjana tab `APP_USERS`, `APP_RECORDS`, dan lain-lain secara automatik pada Langkah 5.
+
+**Langkah 2: Buka Google Apps Script**
+1. Di dalam Google Sheet yang anda buka tadi, klik menu **Extensions** (Sambungan) > **Apps Script**.
+2. Satu tetingkap baharu akan terbuka.
+
+**Langkah 3: Masukkan Kod Backend (Code.gs)**
+1. Di dalam editor Apps Script, cari fail bernama `Code.gs` di panel kiri.
+2. Padam semua kod sedia ada di dalamnya.
+3. Salin (Copy) keseluruhan kod dari **Fail 1 (Code.gs)** di atas dan tampal (Paste) ke dalam editor.
+4. Klik ikon **Save** (💾).
+
+**Langkah 4: Masukkan Kod Frontend (Index.html)**
+1. Di editor Apps Script, klik ikon **+** (Tambah fail) di sebelah kiri, pilih **HTML**.
+2. Namakan fail tersebut sebagai `Index` (huruf besar 'I', tanpa `.html`).
+3. Padam semua kod sedia ada.
+4. Salin keseluruhan kod dari **Fail 2 (Index.html)** di atas dan tampal.
+5. Klik ikon **Save** (💾).
+
+**Langkah 5: Deploy Web App (Kali Pertama)**
+1. Di penjuru atas kanan, klik butang **Deploy** > **New deployment**.
+2. Klik ikon gear (⚙️) di sebelah *Select type* dan pilih **Web app**.
+3. Isikan butiran:
+   * **Description:** `E-Folio App v1`
+   * **Execute as:** `Me` (Akaun anda)
+   * **Who has access:** `Anyone` (Sesiapa sahaja yang mempunyai pautan)
+4. Klik **Deploy**.
+5. Tetingkap kebenaran (Authorize) akan muncul. Klik **Authorize access**.
+6. Pilih akaun Google anda, klik **Advanced** > **Go to [Nama Projek] (unsafe)**, dan klik **Allow**.
+7. Salin (Copy) **Web app URL** yang diberikan.
+
+**Langkah 6: Kemas Kini URL Web App (Penting)**
+1. Kembali ke editor Apps Script.
+2. Buka fail `Code.gs`.
+3. Cari baris ini (di bahagian atas):
+   `const WEB_APP_URL = 'https://script.google.com/...';`
+4. Gantikan URL lama dengan **Web app URL** yang anda salin pada Langkah 5 tadi.
+5. Klik **Save** (💾).
+
+**Langkah 7: Deploy Versi Baharu**
+1. Klik **Deploy** > **Manage deployments**.
+2. Klik ikon **Pensel (Edit)**.
+3. Pada bahagian *Version*, pilih **New version**.
+4. Klik **Deploy**. (Ini penting supaya URL baharu digunakan untuk fungsi e-mel).
+
+**Langkah 8: Ujian & Log Masuk Admin**
+1. Buka **Web app URL** di pelayar anda.
+2. Log masuk menggunakan akaun Admin lalai (sila ubah di dalam kod jika perlu):
+   * **Emel:** `admin@ipgm.edu.my`
+   * **Kata Laluan:** `987654321`
+3. Sistem kini bersedia digunakan. Akaun Admin akan melihat menu **Panel Pemantau** dan **Senarai Semak EOMS**.

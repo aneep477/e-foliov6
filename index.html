@@ -419,6 +419,15 @@ tr:last-child td { border-bottom: none; }
                   <option value="Unit Kokurikulum">Unit Kokurikulum</option>
                 </optgroup>
               </select>
+              
+              <select id="adminYearFilter" class="form-control" style="width: auto; padding: 8px 12px;" onchange="renderAdminTable()">
+                <option value="">Semua Tahun</option>
+              </select>
+              
+              <select id="adminSemFilter" class="form-control" style="width: auto; padding: 8px 12px;" onchange="renderAdminTable()">
+                <option value="">Semua Semester</option>
+                <option value="I">I</option><option value="II">II</option><option value="III">III</option>
+              </select>
             </div>
           </div>
           <div class="card-body">
@@ -434,19 +443,33 @@ tr:last-child td { border-bottom: none; }
 
         <!-- HALAMAN BUTIRAN PENSYARAH (ADMIN KLIK NAMA) -->
         <div id="viewAdminDetail" class="card hidden">
-          <div class="card-header" style="background: #e0e7ff; border-bottom: 2px solid var(--primary); display: flex; justify-content: space-between;">
-            <div>
-              <h3 class="card-title" style="color: var(--primary); font-size: 18px;" id="adminDetailName">Nama Pensyarah</h3>
-              <div class="sub-text" id="adminDetailMeta" style="margin-top:5px;">Jabatan / Unit</div>
+          <div class="card-header" style="background: #e0e7ff; border-bottom: 2px solid var(--primary); display: flex; justify-content: space-between; align-items: center;">
+            <div style="display: flex; align-items: center; gap: 15px;">
+              <img id="adminDetailAvatar" style="width: 50px; height: 50px; border-radius: 50%; object-fit: cover; border: 2px solid var(--primary);" src="" alt="Foto">
+              <div>
+                <h3 class="card-title" style="color: var(--primary); font-size: 18px;" id="adminDetailName">Nama Pensyarah</h3>
+                <div class="sub-text" id="adminDetailMeta" style="margin-top:5px;">Jabatan / Unit</div>
+              </div>
             </div>
             <button class="btn btn-outline btn-sm" onclick="setSection('ADMIN')">← Kembali ke Senarai</button>
           </div>
-          <div class="card-body table-responsive">
-            <table>
-              <thead><tr><th>Tahun / Sem</th><th>Folio</th><th>Kategori</th><th>Maklumat</th><th>Bahan</th></tr></thead>
-              <tbody id="adminDetailBody"></tbody>
-            </table>
-            <div id="adminDetailEmpty" class="hidden" style="text-align: center; padding: 40px; color: var(--text-muted);">Tiada rekod untuk pensyarah ini.</div>
+          <div class="card-body">
+            <div style="padding: 15px; background: #f8fafc; border-bottom: 1px solid var(--border); display: flex; gap: 10px; flex-wrap: wrap;">
+              <select id="adminDetailYearFilter" class="form-control" style="width: auto; padding: 8px 12px;" onchange="renderAdminDetailTable()">
+                <option value="">Semua Tahun</option>
+              </select>
+              <select id="adminDetailSemFilter" class="form-control" style="width: auto; padding: 8px 12px;" onchange="renderAdminDetailTable()">
+                <option value="">Semua Semester</option>
+                <option value="I">I</option><option value="II">II</option><option value="III">III</option>
+              </select>
+            </div>
+            <div class="table-responsive">
+              <table>
+                <thead><tr><th>Tahun / Sem</th><th>Folio</th><th>Kategori</th><th>Maklumat</th><th>Bahan</th></tr></thead>
+                <tbody id="adminDetailBody"></tbody>
+              </table>
+              <div id="adminDetailEmpty" class="hidden" style="text-align: center; padding: 40px; color: var(--text-muted);">Tiada rekod ditemui untuk tapisan ini.</div>
+            </div>
           </div>
         </div>
 
@@ -833,6 +856,7 @@ async function loadAdminData() {
     
     const years = [...new Set(adminRecords.map(r => r.Tahun).filter(Boolean))].sort().reverse();
     $('adminYearFilter').innerHTML = '<option value="">Semua Tahun</option>' + years.map(y => `<option>${esc(y)}</option>`).join('');
+    $('adminDetailYearFilter').innerHTML = '<option value="">Semua Tahun</option>' + years.map(y => `<option>${esc(y)}</option>`).join('');
   } catch(e) { console.error(e); }
 }
 
@@ -927,14 +951,24 @@ function render() {
 /* RENDER PANEL ADMIN (SENARAI PENSYARAH & BELUM MUAT NAIK) */
 function renderAdminTable() {
   const dept = $('adminDeptFilter').value;
+  const year = $('adminYearFilter').value;
+  const sem = $('adminSemFilter').value;
+
   let filteredLecturers = lecturersList.filter(l => l.Role !== 'Admin');
   if(dept) filteredLecturers = filteredLecturers.filter(l => l.Jabatan === dept);
+
+  // Tapis rekod mengikut tahun dan semester yang dipilih (untuk kiraan)
+  const filteredRecords = adminRecords.filter(r => {
+    if(year && String(r.Tahun) !== year) return false;
+    if(sem && String(r.Semester) !== sem) return false;
+    return true;
+  });
 
   $('adminEmpty').classList.toggle('hidden', filteredLecturers.length > 0);
 
   $('adminRecordsBody').innerHTML = filteredLecturers.map(l => {
-    // Kira jumlah bahan milik pensyarah ini
-    const lecRecords = adminRecords.filter(r => r.OwnerEmail === l.Email);
+    // Kira jumlah bahan milik pensyarah ini mengikut tapisan
+    const lecRecords = filteredRecords.filter(r => r.OwnerEmail === l.Email);
     const totalBahan = lecRecords.length;
     const totalKategoriWajib = DEFAULT_CATEGORIES.PROFIL.length + DEFAULT_CATEGORIES.KURSUS.length;
     const totalBelum = totalKategoriWajib - totalBahan;
@@ -981,12 +1015,22 @@ function openAdminDetail(email) {
   
   $('adminDetailName').textContent = lect.NamaPenuh;
   $('adminDetailMeta').textContent = lect.Jabatan + ' · ' + lect.Email;
+  $('adminDetailAvatar').src = lect.FotoUrl || 'https://ui-avatars.com/api/?name='+encodeURIComponent(lect.NamaPenuh||'P')+'&background=1e40af&color=fff';
   
   setSection('ADMIN_DETAIL');
 }
 
 function renderAdminDetailTable() {
-  const list = adminRecords.filter(r => r.OwnerEmail === currentDetailLecturerEmail);
+  const year = $('adminDetailYearFilter').value;
+  const sem = $('adminDetailSemFilter').value;
+  
+  const list = adminRecords.filter(r => {
+    if(r.OwnerEmail !== currentDetailLecturerEmail) return false;
+    if(year && String(r.Tahun) !== year) return false;
+    if(sem && String(r.Semester) !== sem) return false;
+    return true;
+  });
+
   $('adminDetailEmpty').classList.toggle('hidden', list.length > 0);
 
   $('adminDetailBody').innerHTML = list.map(r => `

@@ -864,26 +864,29 @@ async function loadAdminData() {
     lecturersList = resL.lecturers || [];
     adminRecords = resR.records || [];
     
-    updateAdminLecturerList();
-    updateEomsLecturerList(); // Isi dropdown EOMS
-    
-    // Kumpul semua tahun unik dari keseluruhan rekod
+    // 1. Kumpul semua tahun unik dari keseluruhan rekod dan isi dropdown TERLEBIH DAHULU
     const years = [...new Set(adminRecords.map(r => r.Tahun).filter(Boolean))].sort().reverse();
     const yearOptions = '<option value="">Semua Tahun</option>' + years.map(y => `<option value="${y}">${y}</option>`).join('');
     
     $('adminYearFilter').innerHTML = yearOptions;
     $('adminDetailYearFilter').innerHTML = yearOptions;
     $('eomsYearFilter').innerHTML = yearOptions;
+
+    // 2. Baru panggil fungsi lain yang mungkin menggunakan data tersebut
+    updateAdminLecturerList();
+    updateEomsLecturerList();
+    
+    // 3. Render paparan awal
+    renderAdminTable();
+    renderAdminDetailTable();
+    renderEomsTable();
+
   } catch(e) { console.error(e); }
 }
 
 function updateAdminLecturerList() {
-  const selectedDept = $('adminDeptFilter').value;
-  let filteredLecturers = lecturersList.filter(l => l.Role !== 'Admin');
-  if(selectedDept) filteredLecturers = filteredLecturers.filter(l => l.Jabatan === selectedDept);
-  
-  $('adminLecturerSelect').innerHTML = '<option value="">-- Semua Pensyarah --</option>' + 
-    filteredLecturers.map(l => `<option value="${esc(l.Email)}">${esc(l.NamaPenuh)}</option>`).join('');
+  // Fungsi ini tidak lagi menggunakan adminLecturerSelect kerana elemen tersebut telah dibuang dalam HTML.
+  // Ia hanya memanggil renderAdminTable untuk memaparkan senarai penuh.
   renderAdminTable();
 }
 

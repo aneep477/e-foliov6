@@ -1,7 +1,5 @@
-Memandangkan saya adalah AI berasaskan teks, saya **tidak boleh menjana fail `.zip` secara terus** untuk dimuat turun. Walau bagaimanapun, saya telah menyediakan **Pakej Pemindahan Lengkap** di bawah. 
 
 Anda hanya perlu salin kod ini, dan ikut **Manual Pemasangan** yang saya sediakan. Saya juga telah menambah fungsi **Auto-Setup (Setup Wizard)** di dalam kod `Code.gs` supaya anda tidak perlu lagi mencipta tab Google Sheet secara manual — sistem akan menjana semua tab dan header secara automatik apabila dijalankan.
-
 ---
 
 ### 📁 STRUKTUR FAIL YANG DICADANGKAN

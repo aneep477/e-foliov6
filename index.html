@@ -1,20 +1,4 @@
-Berdasarkan gambar yang anda kongsikan, isu sebenar adalah pada **`id` dropdown Tahun** di dalam fungsi `renderAdminDetailTable()`.
 
-Apabila Admin klik "Lihat Folio", fungsi `openAdminDetail()` dipanggil dan ia merujuk kepada `adminDetailYearFilter`. Namun, dalam fungsi `loadAdminData()`, saya telah mengisi *dropdown* dengan ID yang sama (`adminDetailYearFilter`). Tetapi, jika kita perhatikan dengan teliti, fungsi `renderAdminDetailTable()` tidak dipanggil secara automatik apabila *dropdown* ditukar jika `onchange` tidak dilekatkan dengan betul.
-
-Saya telah membaiki isu ini dengan memastikan:
-1. **`onchange` pada dropdown** dihubungkan terus ke fungsi `renderAdminDetailTable()`.
-2. **Penapis diformat dengan betul** (menggunakan `String(r.Tahun) === year` dan `String(r.Semester) === sem`).
-
-**Tidak perlu mengubah kod `Code.gs`** kerana masalah ini murni berlaku di bahagian hadapan (HTML/JS).
-
-Sila salin kod penuh di bawah dan gantikan fail `Index.html` anda.
-
----
-
-### 📄 Index.html (Frontend — Penuh)
-
-```html
 <!doctype html>
 <html lang="ms">
 <head>

@@ -53,6 +53,7 @@ button { cursor: pointer; border: none; }
 .btn-outline:hover { background: var(--bg-app); }
 .btn-danger { background: var(--danger); color: #fff; }
 .btn-success { background: var(--success); color: #fff; }
+.btn-warning { background: #f59e0b; color: #fff; }
 .btn-sm { padding: 6px 12px; font-size: 12px; border-radius: 6px; }
 .link-text { color: var(--primary); font-weight: bold; text-decoration: none; cursor: pointer; }
 .link-text:hover { text-decoration: underline; }
@@ -1029,6 +1030,10 @@ function openAdminDetail(email) {
   $('adminDetailName').textContent = lect.NamaPenuh;
   $('adminDetailMeta').textContent = lect.Jabatan + ' · ' + lect.Email;
   $('adminDetailAvatar').src = lect.FotoUrl || 'https://ui-avatars.com/api/?name='+encodeURIComponent(lect.NamaPenuh||'P')+'&background=1e40af&color=fff';
+  
+  // Reset dropdowns
+  $('adminDetailYearFilter').value = '';
+  $('adminDetailSemFilter').value = '';
   
   setSection('ADMIN_DETAIL');
 }

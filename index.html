@@ -1,4 +1,3 @@
-
 <!doctype html>
 <html lang="ms">
 <head>
@@ -870,7 +869,7 @@ async function loadAdminData() {
     
     // Kumpul semua tahun unik dari keseluruhan rekod
     const years = [...new Set(adminRecords.map(r => r.Tahun).filter(Boolean))].sort().reverse();
-    const yearOptions = '<option value="">Semua Tahun</option>' + years.map(y => `<option>${esc(y)}</option>`).join('');
+    const yearOptions = '<option value="">Semua Tahun</option>' + years.map(y => `<option value="${y}">${y}</option>`).join('');
     
     $('adminYearFilter').innerHTML = yearOptions;
     $('adminDetailYearFilter').innerHTML = yearOptions;
@@ -943,7 +942,7 @@ function setSection(s) {
 /* RENDER JADUAL */
 function fillYears() {
   const ys = [...new Set(records.filter(r => r.Section === section).map(r => r.Tahun).filter(Boolean))].sort().reverse();
-  $('yearFilter').innerHTML = '<option value="">Semua Tahun</option>' + ys.map(y => `<option>${esc(y)}</option>`).join('');
+  $('yearFilter').innerHTML = '<option value="">Semua Tahun</option>' + ys.map(y => `<option value="${y}">${y}</option>`).join('');
 }
 
 function render() {
@@ -977,8 +976,8 @@ function renderAdminTable() {
 
   // Tapis rekod mengikut tahun dan semester yang dipilih (untuk kiraan)
   const filteredRecords = adminRecords.filter(r => {
-    if(year && String(r.Tahun) !== year) return false;
-    if(sem && String(r.Semester) !== sem) return false;
+    if(year && String(r.Tahun) !== String(year)) return false;
+    if(sem && String(r.Semester) !== String(sem)) return false;
     return true;
   });
 
@@ -1048,8 +1047,8 @@ function renderAdminDetailTable() {
   
   const list = adminRecords.filter(r => {
     if(r.OwnerEmail !== currentDetailLecturerEmail) return false;
-    if(year && String(r.Tahun) !== year) return false;
-    if(sem && String(r.Semester) !== sem) return false;
+    if(year && String(r.Tahun) !== String(year)) return false;
+    if(sem && String(r.Semester) !== String(sem)) return false;
     return true;
   });
 
@@ -1321,4 +1320,3 @@ function toBase64(file) {
 </script>
 </body>
 </html>
-```

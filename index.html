@@ -507,6 +507,17 @@ tr:last-child td { border-bottom: none; }
                   <option value="">-- Pilih Pensyarah --</option>
               </select>
 
+              <!-- Tapisan Tahun -->
+              <select id="eomsYearFilter" class="form-control" style="width: auto; padding: 8px 12px;" onchange="renderEomsTable()">
+                <option value="">Semua Tahun</option>
+              </select>
+
+              <!-- Tapisan Semester -->
+              <select id="eomsSemFilter" class="form-control" style="width: auto; padding: 8px 12px;" onchange="renderEomsTable()">
+                <option value="">Semua Semester</option>
+                <option value="I">I</option><option value="II">II</option><option value="III">III</option>
+              </select>
+
               <button class="btn btn-primary" onclick="window.print()">
                 <svg viewBox="0 0 24 24" style="width:16px;height:16px;fill:currentColor;margin-right:5px;"><path d="M19 8H5c-1.66 0-3 1.34-3 3v6h4v4h12v-4h4v-6c0-1.66-1.34-3-3-3zm-3 11H8v-5h8v5zm3-7c-.55 0-1-.45-1-1s.45-1 1-1 1 .45 1 1-.45 1-1 1zm-1-9H6v4h12V3z"/></svg>
                 Cetak Laporan
@@ -519,7 +530,8 @@ tr:last-child td { border-bottom: none; }
               <div id="printHeader" class="hidden" style="text-align: center; margin-bottom: 20px;">
                 <h2 style="margin:0;">LAPORAN PEMANTAUAN EOMS (PT-03)</h2>
                 <p style="margin:5px 0;">Nama Pensyarah: <strong id="printName">-</strong></p>
-                <p style="margin:5px 0;">Jabatan: <span id="printDept">-</span> | Tarikh Cetak: <span id="printDate">-</span></p>
+                <p style="margin:5px 0;">Jabatan: <span id="printDept">-</span></p>
+                <p style="margin:5px 0;">Tahun/Sem: <span id="printSession">-</span> | Tarikh Cetak: <span id="printDate">-</span></p>
                 <hr style="border:1px solid #000; margin-top:15px;">
               </div>
 
@@ -857,6 +869,7 @@ async function loadAdminData() {
     const years = [...new Set(adminRecords.map(r => r.Tahun).filter(Boolean))].sort().reverse();
     $('adminYearFilter').innerHTML = '<option value="">Semua Tahun</option>' + years.map(y => `<option>${esc(y)}</option>`).join('');
     $('adminDetailYearFilter').innerHTML = '<option value="">Semua Tahun</option>' + years.map(y => `<option>${esc(y)}</option>`).join('');
+    $('eomsYearFilter').innerHTML = '<option value="">Semua Tahun</option>' + years.map(y => `<option>${esc(y)}</option>`).join('');
   } catch(e) { console.error(e); }
 }
 
@@ -1047,6 +1060,8 @@ function renderAdminDetailTable() {
 /* RENDER SENARAI SEMAK EOMS (ADMIN) */
 async function renderEomsTable() {
   const lecEmail = $('eomsLecturerSelect').value;
+  const year = $('eomsYearFilter').value;
+  const sem = $('eomsSemFilter').value;
   const table = $('eomsTable');
   
   // Reset header print
@@ -1068,6 +1083,7 @@ async function renderEomsTable() {
   // Sediakan data header untuk cetak
   $('printName').textContent = lect ? lect.NamaPenuh : lecEmail;
   $('printDept').textContent = lect ? lect.Jabatan : '-';
+  $('printSession').textContent = (year ? year : 'Semua Tahun') + ' / ' + (sem ? 'Semester ' + sem : 'Semua Semester');
   const today = new Date();
   $('printDate').textContent = today.toLocaleDateString('ms-MY', { day: '2-digit', month: 'long', year: 'numeric' });
   

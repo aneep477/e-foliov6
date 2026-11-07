@@ -1088,22 +1088,24 @@ async function renderEomsTable() {
   $('printDate').textContent = today.toLocaleDateString('ms-MY', { day: '2-digit', month: 'long', year: 'numeric' });
   
   let html = `<tr class="no-print" style="background:var(--primary-light);"><th>Item Penilaian EOMS</th><th style="text-align:center;">Status</th><th style="text-align:center;">Tindakan</th></tr>`;
-  html += `<tr class="hidden" style="background:#eee;"><th style="border:1px solid #ccc;padding:10px;text-align:left;">Item Penilaian</th><th style="border:1px solid #ccc;padding:10px;text-align:center;width:100px;">Status</th><th class="no-print" style="width:180px;"></th></tr>`;
+  html += `<tr class="hidden" style="background:#eee;"><th style="border:1px solid #ccc;padding:10px;text-align:left;">Item Penilaian</th><th style="border:1px solid #ccc;padding:10px;text-align:center;width:100px;">Status</th><th class="no-print" style="width:240px;"></th></tr>`;
   
   EOMS_CHECKLIST.forEach((item, index) => {
     const status = eomsStatusData[item] || '';
     let st = '<span class="badge" style="background:#e2e8f0;color:#475569;">Belum Semak</span>';
     if(status === 'ADA') st = '<span class="badge badge-success">Ada</span>';
-    if(status === 'TIADA') st = '<span class="badge badge-warning">Tidak Terlibat</span>';
+    if(status === 'TIADA') st = '<span class="badge badge-danger">Tiada</span>';
+    if(status === 'TIDAK TERLIBAT') st = '<span class="badge badge-warning">Tidak Terlibat</span>';
 
     // Optimistic UI: kita simpan status dalam atribut untuk toggle
     html += `
       <tr id="eoms-row-${index}">
         <td style="font-size:12px; border-bottom:1px solid #eee; padding:10px;">${esc(item)}</td>
         <td style="text-align:center; border-bottom:1px solid #eee;" id="eoms-status-${index}">${st}</td>
-        <td class="no-print" style="text-align:center; border-bottom:1px solid #eee;">
+        <td class="no-print" style="text-align:center; border-bottom:1px solid #eee; white-space:nowrap;">
           <button class="btn btn-sm ${status==='ADA'?'btn-success':'btn-outline'}" onclick="toggleEoms('${esc(item)}', 'ADA', ${index})">Ada</button>
           <button class="btn btn-sm ${status==='TIADA'?'btn-danger':'btn-outline'}" onclick="toggleEoms('${esc(item)}', 'TIADA', ${index})">Tiada</button>
+          <button class="btn btn-sm ${status==='TIDAK TERLIBAT'?'btn-warning':'btn-outline'}" onclick="toggleEoms('${esc(item)}', 'TIDAK TERLIBAT', ${index})">Tidak Terlibat</button>
         </td>
       </tr>
     `;
@@ -1124,7 +1126,8 @@ async function toggleEoms(item, newStatus, index) {
   
   let stHtml = '<span class="badge" style="background:#e2e8f0;color:#475569;">Belum Semak</span>';
   if(newStatus === 'ADA') stHtml = '<span class="badge badge-success">Ada</span>';
-  if(newStatus === 'TIADA') stHtml = '<span class="badge badge-warning">Tidak Terlibat</span>';
+  if(newStatus === 'TIADA') stHtml = '<span class="badge badge-danger">Tiada</span>';
+  if(newStatus === 'TIDAK TERLIBAT') stHtml = '<span class="badge badge-warning">Tidak Terlibat</span>';
   
   // Kemas kini sel status
   $(`eoms-status-${index}`).innerHTML = stHtml;
@@ -1134,6 +1137,7 @@ async function toggleEoms(item, newStatus, index) {
   const btns = row.querySelectorAll('button');
   btns[0].className = `btn btn-sm ${newStatus==='ADA'?'btn-success':'btn-outline'}`;
   btns[1].className = `btn btn-sm ${newStatus==='TIADA'?'btn-danger':'btn-outline'}`;
+  btns[2].className = `btn btn-sm ${newStatus==='TIDAK TERLIBAT'?'btn-warning':'btn-outline'}`;
 
   // 3. Hantar ke backend di latar belakang
   try {
@@ -1145,11 +1149,13 @@ async function toggleEoms(item, newStatus, index) {
     
     let revertHtml = '<span class="badge" style="background:#e2e8f0;color:#475569;">Belum Semak</span>';
     if(oldStatus === 'ADA') revertHtml = '<span class="badge badge-success">Ada</span>';
-    if(oldStatus === 'TIADA') revertHtml = '<span class="badge badge-warning">Tidak Terlibat</span>';
+    if(oldStatus === 'TIADA') revertHtml = '<span class="badge badge-danger">Tiada</span>';
+    if(oldStatus === 'TIDAK TERLIBAT') revertHtml = '<span class="badge badge-warning">Tidak Terlibat</span>';
     
     $(`eoms-status-${index}`).innerHTML = revertHtml;
     btns[0].className = `btn btn-sm ${oldStatus==='ADA'?'btn-success':'btn-outline'}`;
     btns[1].className = `btn btn-sm ${oldStatus==='TIADA'?'btn-danger':'btn-outline'}`;
+    btns[2].className = `btn btn-sm ${oldStatus==='TIDAK TERLIBAT'?'btn-warning':'btn-outline'}`;
   }
 }
 

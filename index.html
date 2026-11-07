@@ -393,12 +393,12 @@ tr:last-child td { border-bottom: none; }
           <div id="statsContainer" class="grid-list"></div>
         </div>
 
-        <!-- PANEL ADMIN (PEMANTAU) -->
+        <!-- PANEL ADMIN (PEMANTAU) - SENARAI PENSYARAH -->
         <div id="viewAdmin" class="card hidden">
           <div class="card-header" style="background: #f8fafc; border-bottom: 2px solid var(--primary); flex-direction: column; align-items: flex-start;">
-            <h3 class="card-title" style="color: var(--primary); margin-bottom: 15px;">Panel Pemantau / Admin</h3>
+            <h3 class="card-title" style="color: var(--primary); margin-bottom: 15px;">Senarai Pensyarah (Pemantau)</h3>
             <div style="display: flex; gap: 10px; flex-wrap: wrap; width: 100%;">
-              <select id="adminDeptFilter" class="form-control" style="width: auto; padding: 8px 12px;" onchange="updateAdminLecturerList()">
+              <select id="adminDeptFilter" class="form-control" style="width: auto; padding: 8px 12px;" onchange="renderAdminTable()">
                 <option value="">-- Semua Jabatan --</option>
                 <optgroup label="Sektor Kecemerlangan Akademik">
                   <option value="Sekretariat Jaminan Kualiti & Pematuhan Polisi">Sekretariat Jaminan Kualiti & Pematuhan Polisi (SJKPP)</option>
@@ -419,24 +419,34 @@ tr:last-child td { border-bottom: none; }
                   <option value="Unit Kokurikulum">Unit Kokurikulum</option>
                 </optgroup>
               </select>
-              <select id="adminLecturerSelect" class="form-control" onchange="renderAdminTable()" style="width: auto; padding: 8px 12px;"><option value="">-- Semua Pensyarah --</option></select>
-              <select id="adminSectionFilter" class="form-control" style="width: auto; padding: 8px 12px;" onchange="renderAdminTable()">
-                <option value="">-- Semua Folio --</option><option value="PROFIL">Folio Pensyarah</option><option value="KURSUS">Folio Kursus</option>
-              </select>
-              <select id="adminYearFilter" class="form-control" style="width: auto; padding: 8px 12px;" onchange="renderAdminTable()"><option value="">Semua Tahun</option></select>
-              <select id="adminSemFilter" class="form-control" style="width: auto; padding: 8px 12px;" onchange="renderAdminTable()">
-                <option value="">Semua Semester</option><option value="I">I</option><option value="II">II</option><option value="III">III</option>
-              </select>
             </div>
           </div>
           <div class="card-body">
             <div class="table-responsive">
               <table>
-                <thead><tr><th>Pensyarah / Jabatan</th><th>Folio</th><th>Tahun / Sem</th><th>Maklumat</th><th>Bahan</th></tr></thead>
+                <thead><tr><th>Nama Pensyarah</th><th>Jabatan / Unit</th><th style="text-align:center;">Jumlah Bahan</th><th style="text-align:center;">Belum Dimuat Naik</th><th style="text-align:right;">Tindakan</th></tr></thead>
                 <tbody id="adminRecordsBody"></tbody>
               </table>
-              <div id="adminEmpty" class="hidden" style="text-align: center; padding: 40px; color: var(--text-muted);">Tiada rekod untuk tapisan ini.</div>
+              <div id="adminEmpty" class="hidden" style="text-align: center; padding: 40px; color: var(--text-muted);">Tiada pensyarah ditemui.</div>
             </div>
+          </div>
+        </div>
+
+        <!-- HALAMAN BUTIRAN PENSYARAH (ADMIN KLIK NAMA) -->
+        <div id="viewAdminDetail" class="card hidden">
+          <div class="card-header" style="background: #e0e7ff; border-bottom: 2px solid var(--primary); display: flex; justify-content: space-between;">
+            <div>
+              <h3 class="card-title" style="color: var(--primary); font-size: 18px;" id="adminDetailName">Nama Pensyarah</h3>
+              <div class="sub-text" id="adminDetailMeta" style="margin-top:5px;">Jabatan / Unit</div>
+            </div>
+            <button class="btn btn-outline btn-sm" onclick="setSection('ADMIN')">← Kembali ke Senarai</button>
+          </div>
+          <div class="card-body table-responsive">
+            <table>
+              <thead><tr><th>Tahun / Sem</th><th>Folio</th><th>Kategori</th><th>Maklumat</th><th>Bahan</th></tr></thead>
+              <tbody id="adminDetailBody"></tbody>
+            </table>
+            <div id="adminDetailEmpty" class="hidden" style="text-align: center; padding: 40px; color: var(--text-muted);">Tiada rekod untuk pensyarah ini.</div>
           </div>
         </div>
 
@@ -628,6 +638,7 @@ const EOMS_CHECKLIST = [
 
 let token='', user=null, section='PROFIL', records=[], checklistStatus={}, categories=DEFAULT_CATEGORIES;
 let adminRecords=[], lecturersList=[], eomsStatusData={};
+let currentDetailLecturerEmail = '';
 const $ = id => document.getElementById(id);
 const esc = s => String(s??'').replace(/[&<>'"]/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]));
 
@@ -876,6 +887,10 @@ function setSection(s) {
     $('viewAdmin').classList.remove('hidden');
     $('pageTitle').textContent = 'Panel Pemantau';
     renderAdminTable();
+  } else if(s === 'ADMIN_DETAIL') {
+    $('viewAdminDetail').classList.remove('hidden');
+    $('pageTitle').textContent = 'Butiran Folio Pensyarah';
+    renderAdminDetailTable();
   } else if(s === 'EOMS') {
     $('viewEoms').classList.remove('hidden');
     $('pageTitle').textContent = 'Senarai Semak EOMS';
@@ -909,41 +924,80 @@ function render() {
   `).join('');
 }
 
+/* RENDER PANEL ADMIN (SENARAI PENSYARAH & BELUM MUAT NAIK) */
 function renderAdminTable() {
   const dept = $('adminDeptFilter').value;
-  const lec = $('adminLecturerSelect').value;
-  const secType = $('adminSectionFilter').value;
-  const year = $('adminYearFilter').value;
-  const sem = $('adminSemFilter').value;
+  let filteredLecturers = lecturersList.filter(l => l.Role !== 'Admin');
+  if(dept) filteredLecturers = filteredLecturers.filter(l => l.Jabatan === dept);
 
-  const list = adminRecords.filter(r => {
-    if (dept) {
-      const lecturer = lecturersList.find(l => l.Email === r.OwnerEmail);
-      if (!lecturer || lecturer.Jabatan !== dept) return false;
+  $('adminEmpty').classList.toggle('hidden', filteredLecturers.length > 0);
+
+  $('adminRecordsBody').innerHTML = filteredLecturers.map(l => {
+    // Kira jumlah bahan milik pensyarah ini
+    const lecRecords = adminRecords.filter(r => r.OwnerEmail === l.Email);
+    const totalBahan = lecRecords.length;
+    const totalKategoriWajib = DEFAULT_CATEGORIES.PROFIL.length + DEFAULT_CATEGORIES.KURSUS.length;
+    const totalBelum = totalKategoriWajib - totalBahan;
+    
+    // Sediakan senarai kecil untuk paparan
+    let badgeBelum = '';
+    if (totalBelum > 0) {
+        // Dapatkan nama-nama kategori yang belum diisi
+        const filledCats = lecRecords.map(r => r.Kategori);
+        const missingCats = [...DEFAULT_CATEGORIES.PROFIL, ...DEFAULT_CATEGORIES.KURSUS].filter(c => !filledCats.includes(c));
+        
+        // Papar 2-3 contoh sahaja supaya tidak terlalu panjang
+        const displayMissing = missingCats.slice(0, 3).map(c => `<div class="sub-text" style="color:var(--danger);">- ${esc(c)}</div>`).join('');
+        const moreText = missingCats.length > 3 ? `<div class="sub-text" style="color:var(--danger); font-style:italic;">...dan ${missingCats.length - 3} lagi</div>` : '';
+        badgeBelum = displayMissing + moreText;
+    } else {
+        badgeBelum = `<div class="sub-text" style="color:var(--success);">Lengkap</div>`;
     }
-    if (lec && r.OwnerEmail !== lec) return false;
-    if (secType && r.Section !== secType) return false;
-    if (year && String(r.Tahun) !== year) return false;
-    if (sem && String(r.Semester) !== sem) return false;
-    return true;
-  });
 
-  $('adminEmpty').classList.toggle('hidden', list.length > 0);
-
-  $('adminRecordsBody').innerHTML = list.map(r => {
-    const lect = lecturersList.find(l => l.Email === r.OwnerEmail);
-    const lectName = lect ? lect.NamaPenuh : r.OwnerEmail;
-    const lectDept = lect ? lect.Jabatan : '-';
     return `
       <tr>
-        <td><div class="title-main">${esc(lectName)}</div><div class="sub-text">${esc(lectDept)}</div></td>
-        <td><span class="badge badge-primary">${r.Section === 'PROFIL' ? 'Pensyarah' : 'Kursus'}</span></td>
-        <td>${esc(r.Tahun)} / Sem ${esc(r.Semester||'-')}</td>
-        <td><div class="title-main">${esc(r.Kategori)}</div><div class="sub-text">${esc(r.Tajuk)}</div></td>
-        <td>${r.FileUrl ? `<a href="${esc(r.FileUrl)}" target="_blank" style="color:var(--primary); font-weight:bold;">Buka</a>` : '-'}</td>
+        <td>
+          <div class="title-main" style="cursor:pointer; color:var(--primary); text-decoration:underline;" onclick="openAdminDetail('${esc(l.Email)}')">${esc(l.NamaPenuh)}</div>
+        </td>
+        <td>${esc(l.Jabatan)}</td>
+        <td style="text-align:center;"><strong>${totalBahan}</strong></td>
+        <td>
+          <strong style="color:${totalBelum>0?'var(--danger)':'var(--success)'}; font-size:14px;">${totalBelum > 0 ? totalBelum + ' Kategori' : '0'}</strong>
+          ${badgeBelum}
+        </td>
+        <td style="text-align:right;">
+           <button class="btn btn-primary btn-sm" onclick="openAdminDetail('${esc(l.Email)}')">Lihat Folio</button>
+        </td>
       </tr>
     `;
   }).join('');
+}
+
+/* HALAMAN BUTIRAN ADMIN */
+function openAdminDetail(email) {
+  const lect = lecturersList.find(l => l.Email === email);
+  if(!lect) return;
+  currentDetailLecturerEmail = email;
+  
+  $('adminDetailName').textContent = lect.NamaPenuh;
+  $('adminDetailMeta').textContent = lect.Jabatan + ' · ' + lect.Email;
+  
+  setSection('ADMIN_DETAIL');
+}
+
+function renderAdminDetailTable() {
+  const list = adminRecords.filter(r => r.OwnerEmail === currentDetailLecturerEmail);
+  $('adminDetailEmpty').classList.toggle('hidden', list.length > 0);
+
+  $('adminDetailBody').innerHTML = list.map(r => `
+    <tr>
+      <td><div class="title-main">${esc(r.Tahun)}</div><div class="sub-text">Sem ${esc(r.Semester||'-')}</div></td>
+      <td><span class="badge badge-primary">${r.Section === 'PROFIL' ? 'Pensyarah' : 'Kursus'}</span></td>
+      <td><span class="badge badge-primary" style="background:#f8fafc; border:1px solid var(--border); color:var(--text-main);">${esc(r.Kategori)}</span></td>
+      <td><div class="title-main">${esc(r.Tajuk)}</div><div class="sub-text">${esc(r.Keterangan||'')}</div></td>
+      <td>${r.FileUrl ? `<a href="${esc(r.FileUrl)}" target="_blank" style="color:var(--primary); font-weight:bold;">Buka Fail</a>` : '-'}</td>
+    </tr>
+  `).join('');
 }
 
 /* RENDER SENARAI SEMAK EOMS (ADMIN) */
@@ -982,13 +1036,14 @@ async function renderEomsTable() {
     if(status === 'ADA') st = '<span class="badge badge-success">Ada</span>';
     if(status === 'TIADA') st = '<span class="badge badge-warning">Tidak Terlibat</span>';
 
+    // Optimistic UI: kita simpan status dalam atribut untuk toggle
     html += `
-      <tr>
+      <tr id="eoms-row-${index}">
         <td style="font-size:12px; border-bottom:1px solid #eee; padding:10px;">${esc(item)}</td>
-        <td style="text-align:center; border-bottom:1px solid #eee;">${st}</td>
+        <td style="text-align:center; border-bottom:1px solid #eee;" id="eoms-status-${index}">${st}</td>
         <td class="no-print" style="text-align:center; border-bottom:1px solid #eee;">
-          <button class="btn btn-sm ${status==='ADA'?'btn-success':'btn-outline'}" onclick="toggleEoms('${esc(item)}', 'ADA')">Ada</button>
-          <button class="btn btn-sm ${status==='TIADA'?'btn-danger':'btn-outline'}" onclick="toggleEoms('${esc(item)}', 'TIADA')">Tiada</button>
+          <button class="btn btn-sm ${status==='ADA'?'btn-success':'btn-outline'}" onclick="toggleEoms('${esc(item)}', 'ADA', ${index})">Ada</button>
+          <button class="btn btn-sm ${status==='TIADA'?'btn-danger':'btn-outline'}" onclick="toggleEoms('${esc(item)}', 'TIADA', ${index})">Tiada</button>
         </td>
       </tr>
     `;
@@ -997,14 +1052,45 @@ async function renderEomsTable() {
   table.innerHTML = html;
 }
 
-async function toggleEoms(item, status) {
+async function toggleEoms(item, newStatus, index) {
   const lecEmail = $('eomsLecturerSelect').value;
   if(!lecEmail) return;
+  
+  // 1. Simpan status lama untuk rollback jika gagal
+  const oldStatus = eomsStatusData[item] || '';
+  
+  // 2. Kemas kini UI serta-merta (Optimistic UI)
+  eomsStatusData[item] = newStatus;
+  
+  let stHtml = '<span class="badge" style="background:#e2e8f0;color:#475569;">Belum Semak</span>';
+  if(newStatus === 'ADA') stHtml = '<span class="badge badge-success">Ada</span>';
+  if(newStatus === 'TIADA') stHtml = '<span class="badge badge-warning">Tidak Terlibat</span>';
+  
+  // Kemas kini sel status
+  $(`eoms-status-${index}`).innerHTML = stHtml;
+  
+  // Kemas kini butang (tukar warna)
+  const row = $(`eoms-row-${index}`);
+  const btns = row.querySelectorAll('button');
+  btns[0].className = `btn btn-sm ${newStatus==='ADA'?'btn-success':'btn-outline'}`;
+  btns[1].className = `btn btn-sm ${newStatus==='TIADA'?'btn-danger':'btn-outline'}`;
+
+  // 3. Hantar ke backend di latar belakang
   try {
-    await api('toggleEoms', { targetEmail: lecEmail, itemName: item, status });
-    eomsStatusData[item] = status;
-    renderEomsTable(); // Refresh view
-  } catch(e) { showToast(e.message, true); }
+    await api('toggleEoms', { targetEmail: lecEmail, itemName: item, status: newStatus });
+  } catch(e) { 
+    // Jika gagal, rollback UI
+    showToast('Gagal menyimpan. Sila cuba lagi.', true); 
+    eomsStatusData[item] = oldStatus;
+    
+    let revertHtml = '<span class="badge" style="background:#e2e8f0;color:#475569;">Belum Semak</span>';
+    if(oldStatus === 'ADA') revertHtml = '<span class="badge badge-success">Ada</span>';
+    if(oldStatus === 'TIADA') revertHtml = '<span class="badge badge-warning">Tidak Terlibat</span>';
+    
+    $(`eoms-status-${index}`).innerHTML = revertHtml;
+    btns[0].className = `btn btn-sm ${oldStatus==='ADA'?'btn-success':'btn-outline'}`;
+    btns[1].className = `btn btn-sm ${oldStatus==='TIADA'?'btn-danger':'btn-outline'}`;
+  }
 }
 
 /* RENDER CHECKLIST & STATISTIK (PENSYARAH) */
